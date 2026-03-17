@@ -1214,7 +1214,44 @@ async function refreshSelectedTrackingHistory() {
     showToast('⚠️ Sign in with the Gmail account whose tracking history you want to load.');
     return;
   }
-  await syncRemoteTrackingHistoryForCurrentUser(false);
+  const visibleCampaigns = getVisibleTrackingCampaignHistory();
+  const selectedCampaign = normalizeTrackingCampaignSnapshot(
+    getTrackingHistoryCampaignById(getTrackingHistorySelectionId()) || visibleCampaigns[0]
+  );
+
+  try {
+    const synced = await syncRemoteTrackingHistoryForCurrentUser(true, true);
+    if (synced) {
+      showToast('Tracking history synced.');
+      return;
+    }
+  } catch (remoteError) {
+    if (selectedCampaign) {
+      try {
+        await refreshTrackingHistoryCampaign(selectedCampaign);
+        showToast('Tracking history refreshed from the saved campaign on this browser.');
+        return;
+      } catch (fallbackError) {
+        showToast(`⚠️ ${getTrackingRequestErrorMessage(fallbackError)}`);
+        return;
+      }
+    }
+    showToast(`⚠️ ${getTrackingRequestErrorMessage(remoteError)}`);
+    return;
+  }
+
+  if (selectedCampaign) {
+    try {
+      await refreshTrackingHistoryCampaign(selectedCampaign);
+      showToast('Tracking history refreshed from the saved campaign on this browser.');
+      return;
+    } catch (fallbackError) {
+      showToast(`⚠️ ${getTrackingRequestErrorMessage(fallbackError)}`);
+      return;
+    }
+  }
+
+  showToast('Tracking history synced.');
 }
 
 function clearTrackingHistory() {
@@ -1230,10 +1267,10 @@ function clearTrackingHistory() {
   showToast(sender ? 'Saved tracking history cleared for this account on this browser.' : 'Saved tracking history cleared from this browser.');
 }
 
-async function syncRemoteTrackingHistoryForCurrentUser(silent = true) {
-  if (authProvider !== 'google' || !accessToken || !senderEmail) return;
+async function syncRemoteTrackingHistoryForCurrentUser(silent = true, throwOnError = false) {
+  if (authProvider !== 'google' || !accessToken || !senderEmail) return false;
   const cfg = getTrackingConfig();
-  if (!cfg.endpoint || !cfg.statusKey) return;
+  if (!cfg.endpoint || !cfg.statusKey) return false;
   try {
     const payload = await requestTrackingJsonp(cfg.endpoint, {
       action: 'history',
@@ -1243,9 +1280,51 @@ async function syncRemoteTrackingHistoryForCurrentUser(silent = true) {
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking history fetch failed.');
     mergeRemoteTrackingHistory(Array.isArray(payload.campaigns) ? payload.campaigns : []);
     if (!silent) showToast('Tracking history synced.');
+    return true;
   } catch (e) {
+    if (throwOnError) throw e;
     if (!silent) showToast(`⚠️ ${getTrackingRequestErrorMessage(e)}`);
+    return false;
   }
+}
+
+async function refreshTrackingHistoryCampaign(campaign) {
+  const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
+  if (!normalized?.id) {
+    throw new Error('No saved tracked campaign is available to refresh yet.');
+  }
+
+  const endpoint = normalized.endpoint || getTrackingConfig().endpoint;
+  const statusKey = normalized.statusKey || getTrackingConfig().statusKey;
+  if (!endpoint || !statusKey) {
+    throw new Error('Tracking settings are missing for this saved campaign.');
+  }
+
+  const payload = await requestTrackingJsonp(endpoint, {
+    action: 'status',
+    key: statusKey,
+    campaign: normalized.id
+  });
+  if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
+
+  const refreshed = normalizeTrackingCampaignSnapshot({
+    ...normalized,
+    endpoint,
+    statusKey,
+    lastSyncedAt: new Date().toISOString()
+  }, normalized);
+  mergeTrackingStatusIntoCampaign(refreshed, Array.isArray(payload.records) ? payload.records : []);
+  refreshed.lastSyncedAt = new Date().toISOString();
+  upsertTrackingCampaignHistory(refreshed);
+
+  if (trackingCampaign?.id === refreshed.id) {
+    trackingCampaign = normalizeTrackingCampaignSnapshot(refreshed, trackingCampaign);
+    renderTrackingPanel();
+    syncTrackingLogMessages();
+  }
+
+  renderTrackingHistorySection();
+  return refreshed;
 }
 
 function getTrackingConfig() {
