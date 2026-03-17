@@ -260,7 +260,7 @@
       <div class="btn-row" style="justify-content:center;margin-top:0">
       <button class="btn-google" id="googleAuthBtn" onclick="startGoogleAuth()">
         <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/><path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/><path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/><path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/></svg>
-        Sign in with Google
+        <span id="googleAuthBtnLabel">Sign in with Google</span>
       </button>
       <button class="btn btn-ghost" id="microsoftAuthBtn" onclick="startMicrosoftAuth()">
         Sign in with Outlook / Microsoft 365
@@ -500,7 +500,8 @@
 <script>
 // ==================== STATE ====================
 // Set these once and deploy if you want to preconfigure either provider.
-const PRECONFIGURED_GOOGLE_CLIENT_ID = '';
+// Google OAuth client IDs are public-safe and should be embedded here for shared/public deployments.
+const PRECONFIGURED_GOOGLE_CLIENT_ID = '511791686947-4op425a7n3lts77ujs8fe47h0cgmgcsa.apps.googleusercontent.com';
 const PRECONFIGURED_MICROSOFT_CLIENT_ID = 'b4852587-3020-44d0-bf4b-a8f82bfcc8ac';
 const PRECONFIGURED_TRACKING_ENABLED = false;
 const PRECONFIGURED_TRACKING_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFZlojQMxzp2qDC6QdipxZqy73bA44_JTlbomOzCCv2JCysNM2WpAsmF-yKIWW5pVx/exec';
@@ -633,13 +634,18 @@ function showSetup() {
 
 function updateAuthButtons() {
   const googleBtn = document.getElementById('googleAuthBtn');
+  const googleBtnLabel = document.getElementById('googleAuthBtnLabel');
   const microsoftBtn = document.getElementById('microsoftAuthBtn');
   const hint = document.getElementById('authHint');
-  if (!googleBtn || !microsoftBtn || !hint) return;
+  if (!googleBtn || !googleBtnLabel || !microsoftBtn || !hint) return;
   const microsoftSupported = isMicrosoftWebAuthSupported();
 
-  googleBtn.disabled = !googleClientId;
+  googleBtn.disabled = false;
   microsoftBtn.disabled = !microsoftClientId || !microsoftSupported;
+  googleBtnLabel.textContent = googleClientId ? 'Sign in with Google' : 'Set up Google sign-in';
+  googleBtn.title = googleClientId
+    ? ''
+    : 'Gmail is not configured in this deployment yet. Click to open setup.';
 
   const ready = [];
   if (googleClientId) ready.push('Gmail ready');
@@ -651,6 +657,10 @@ function updateAuthButtons() {
   }
   if (googleClientId && !microsoftClientId) {
     hint.textContent = 'Gmail ready. If another Google account gets Error 403 access_denied, add it as a Google OAuth test user or use a verified production client.';
+    return;
+  }
+  if (!googleClientId && microsoftClientId) {
+    hint.textContent = 'Gmail is not configured in this public deployment yet. Click the Google button to open setup, then add a public Google OAuth client ID or ship one in PRECONFIGURED_GOOGLE_CLIENT_ID.';
     return;
   }
   hint.textContent = ready.length ? ready.join(' · ') : 'Add a client ID in setup before signing in.';

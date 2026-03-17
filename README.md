@@ -43,6 +43,13 @@ In Google Cloud Console OAuth client:
    - If you want anyone to use it, move the app to `Production` and complete any Google verification required for the Gmail scope.
 6. Copy the new Google OAuth Client ID into the app using `Manage Client IDs`.
 
+### For a public GitHub Pages deployment
+- Put your Google OAuth client ID directly into `PRECONFIGURED_GOOGLE_CLIENT_ID` inside `docs/index.html` before publishing. A Google OAuth client ID is public-safe and is meant to be exposed in browser apps.
+- If `PRECONFIGURED_GOOGLE_CLIENT_ID` is blank, the public site can still work for you if your browser already saved the ID in `localStorage`, but new visitors will not inherit it.
+- If friends can click the Google button but Google returns `Error 403: access_denied`, that is a Google Cloud audience/verification problem, not a JavaScript bug:
+  - Add each Gmail address under `Google Auth Platform` -> `Audience` -> `Test users`, or
+  - Move the OAuth app to `Production` and complete any required verification so anyone can sign in.
+
 ### If you no longer have the old Google Cloud account
 - The app no longer hardcodes the old Google OAuth client ID.
 - Create a fresh OAuth client in your current Google account and paste that new client ID into the app.
