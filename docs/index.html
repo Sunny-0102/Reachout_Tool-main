@@ -650,7 +650,7 @@ function startGoogleAuth() {
       showToast(`❌ Google sign-in failed${kind}.`);
     },
   });
-  client.requestAccessToken({ prompt: 'select_account consent' });
+  client.requestAccessToken({ prompt: 'select_account' });
 }
 
 async function fetchGoogleUserInfo() {
