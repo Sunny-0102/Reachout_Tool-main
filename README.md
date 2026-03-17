@@ -30,9 +30,20 @@ Then open:
 ## Google OAuth setup
 In Google Cloud Console OAuth client:
 1. Enable Gmail API.
-2. Add authorized JavaScript origins:
+2. Create a new OAuth client of type `Web application`.
+3. Add authorized JavaScript origins:
    - `https://sunny-0102.github.io`
    - `http://localhost:8001`
+4. Add authorized redirect URIs:
+   - `https://sunny-0102.github.io/Reachout_Tool-main/`
+   - `http://localhost:8001/index.html`
+   - `http://localhost:8001`
+5. Copy the new Google OAuth Client ID into the app using `Manage Client IDs`.
+
+### If you no longer have the old Google Cloud account
+- The app no longer hardcodes the old Google OAuth client ID.
+- Create a fresh OAuth client in your current Google account and paste that new client ID into the app.
+- If an old client ID was stored in your browser, the app now clears that legacy ID automatically.
 
 ## Microsoft OAuth setup
 In Microsoft Entra App registrations:
