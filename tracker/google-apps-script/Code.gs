@@ -1,4 +1,4 @@
-const TRACKER_STATUS_KEY = 'change-this-before-deploy';
+const TRACKER_STATUS_KEY = 'mailblast-open-2026-very-secret-48291';
 const TRACKER_SHEET_NAME = 'MailBlast Opens';
 const TRACKER_HEADERS = [
   'id',
