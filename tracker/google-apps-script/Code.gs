@@ -10,13 +10,18 @@ const TRACKER_HEADERS = [
   'lastOpenedAt',
   'openCount',
   'createdAt',
-  'updatedAt'
+  'updatedAt',
+  'senderEmail',
+  'senderName',
+  'provider',
+  'subject'
 ];
 
 function doGet(e) {
   const action = String((e && e.parameter && e.parameter.action) || 'open').toLowerCase();
   if (action === 'register') return respond_(e, registerSend_(e));
   if (action === 'status') return respond_(e, getCampaignStatus_(e));
+  if (action === 'history') return respond_(e, getSenderHistory_(e));
   return logOpen_(e);
 }
 
@@ -43,7 +48,11 @@ function registerSend_(e) {
     '',
     0,
     now,
-    now
+    now,
+    normalizeEmail_(param_(e, 'senderEmail')),
+    param_(e, 'senderName'),
+    param_(e, 'provider'),
+    param_(e, 'subject')
   ];
 
   if (rowNumber > 1) {
@@ -53,6 +62,10 @@ function registerSend_(e) {
     existing[3] = param_(e, 'name');
     existing[4] = param_(e, 'sentAt') || existing[4] || now;
     existing[9] = now;
+    existing[10] = normalizeEmail_(param_(e, 'senderEmail'));
+    existing[11] = param_(e, 'senderName');
+    existing[12] = param_(e, 'provider');
+    existing[13] = param_(e, 'subject');
     sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length).setValues([existing]);
   } else {
     sheet.appendRow(record);
@@ -89,6 +102,67 @@ function getCampaignStatus_(e) {
     });
 
   return { ok: true, records: records };
+}
+
+function getSenderHistory_(e) {
+  if (!hasValidStatusKey_(e)) return { ok: false, error: 'Invalid status key.' };
+
+  const viewer = getViewerFromAccessToken_(param_(e, 'token'));
+  if (!viewer || !viewer.email) {
+    return { ok: false, error: 'Sign in with Google again, then refresh tracking history.' };
+  }
+
+  const sheet = getTrackerSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, email: viewer.email, campaigns: [] };
+
+  const rows = sheet.getRange(2, 1, lastRow - 1, TRACKER_HEADERS.length).getValues();
+  const senderEmail = normalizeEmail_(viewer.email);
+  var campaignsById = {};
+
+  rows.forEach(function(rawRow) {
+    const row = normalizeTrackerRow_(rawRow);
+    if (normalizeEmail_(row[10]) !== senderEmail) return;
+
+    const campaignId = String(row[1] || '');
+    if (!campaignId) return;
+
+    if (!campaignsById[campaignId]) {
+      campaignsById[campaignId] = {
+        id: campaignId,
+        createdAt: String(row[8] || ''),
+        lastSyncedAt: String(row[9] || ''),
+        senderEmail: String(row[10] || ''),
+        senderName: String(row[11] || ''),
+        provider: String(row[12] || ''),
+        records: []
+      };
+    }
+
+    campaignsById[campaignId].records.push({
+      id: String(row[0] || ''),
+      email: String(row[2] || ''),
+      name: String(row[3] || ''),
+      subject: String(row[13] || ''),
+      sentAt: String(row[4] || ''),
+      firstOpenedAt: String(row[5] || ''),
+      lastOpenedAt: String(row[6] || ''),
+      openedAt: String(row[6] || row[5] || ''),
+      openCount: Number(row[7] || 0)
+    });
+
+    if (String(row[9] || '') > String(campaignsById[campaignId].lastSyncedAt || '')) {
+      campaignsById[campaignId].lastSyncedAt = String(row[9] || '');
+    }
+  });
+
+  const campaigns = Object.keys(campaignsById)
+    .map(function(campaignId) { return campaignsById[campaignId]; })
+    .sort(function(a, b) {
+      return Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0);
+    });
+
+  return { ok: true, email: viewer.email, campaigns: campaigns };
 }
 
 function logOpen_(e) {
@@ -137,6 +211,30 @@ function param_(e, key) {
   return String((e && e.parameter && e.parameter[key]) || '').trim();
 }
 
+function normalizeEmail_(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getViewerFromAccessToken_(token) {
+  if (!token) return null;
+  try {
+    const resp = UrlFetchApp.fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) return null;
+    const payload = JSON.parse(resp.getContentText() || '{}');
+    const email = normalizeEmail_(payload.email);
+    if (!email) return null;
+    return {
+      email: email,
+      name: String(payload.name || '')
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
 function getTrackerSheet_() {
   const props = PropertiesService.getScriptProperties();
   let spreadsheetId = props.getProperty('TRACKER_SHEET_ID');
@@ -174,6 +272,11 @@ function normalizeTrackerRow_(row) {
   if (row.length >= TRACKER_HEADERS.length) return row.slice(0, TRACKER_HEADERS.length);
 
   const normalized = new Array(TRACKER_HEADERS.length).fill('');
+  if (row.length === 10) {
+    for (var j = 0; j < row.length; j++) normalized[j] = row[j];
+    return normalized;
+  }
+
   normalized[0] = row[0] || '';
   normalized[1] = row[1] || '';
   normalized[2] = row[2] || '';

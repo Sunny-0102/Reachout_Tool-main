@@ -746,6 +746,7 @@ async function fetchGoogleUserInfo() {
     updateUserChip(info.name || info.email);
   } catch(e) {}
   showComposer();
+  syncRemoteTrackingHistoryForCurrentUser(true);
 }
 
 async function startMicrosoftAuth() {
@@ -884,6 +885,7 @@ function showComposer() {
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('composerApp').style.display = 'block';
   updateTrackingSettingsUi();
+  renderTrackingHistorySection();
 }
 
 async function revokeGoogleAccess() {
@@ -1020,10 +1022,21 @@ function cloneTrackingCampaign(campaign) {
   return JSON.parse(JSON.stringify(campaign));
 }
 
+function normalizeTrackingEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function getVisibleTrackingCampaignHistory() {
+  const sender = normalizeTrackingEmail(senderEmail);
+  if (!sender || authProvider !== 'google') return [];
+  return trackingCampaignHistory.filter(campaign => normalizeTrackingEmail(campaign.senderEmail) === sender);
+}
+
 function getTrackingHistorySelectionId() {
   const stored = localStorage.getItem(TRACKING_HISTORY_SELECTION_KEY) || '';
-  if (stored && trackingCampaignHistory.some(campaign => campaign.id === stored)) return stored;
-  return trackingCampaignHistory[0]?.id || '';
+  const visibleCampaigns = getVisibleTrackingCampaignHistory();
+  if (stored && visibleCampaigns.some(campaign => campaign.id === stored)) return stored;
+  return visibleCampaigns[0]?.id || '';
 }
 
 function setTrackingHistorySelectionId(campaignId) {
@@ -1050,6 +1063,23 @@ function upsertTrackingCampaignHistory(campaign) {
 function saveActiveTrackingCampaign() {
   if (!trackingCampaign?.id) return;
   upsertTrackingCampaignHistory(trackingCampaign);
+}
+
+function mergeRemoteTrackingHistory(campaigns) {
+  const remote = Array.isArray(campaigns) ? campaigns : [];
+  const cfg = getTrackingConfig();
+  remote.forEach(campaign => {
+    if (!campaign || !campaign.id || !Array.isArray(campaign.records)) return;
+    const normalized = cloneTrackingCampaign(campaign);
+    normalized.endpoint = cfg.endpoint || normalized.endpoint || '';
+    normalized.statusKey = cfg.statusKey || normalized.statusKey || '';
+    trackingCampaignHistory = trackingCampaignHistory.filter(existing => existing.id !== normalized.id);
+    trackingCampaignHistory.unshift(normalized);
+  });
+  trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  trackingCampaignHistory = trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT);
+  persistTrackingCampaignHistory();
+  renderTrackingHistorySection();
 }
 
 function buildTrackingCampaignLabel(campaign) {
@@ -1095,7 +1125,8 @@ function renderTrackingHistorySection() {
   const tbody = document.getElementById('trackingHistoryTbody');
   if (!wrap || !select || !meta || !tbody) return;
 
-  if (!trackingCampaignHistory.length) {
+  const visibleCampaigns = getVisibleTrackingCampaignHistory();
+  if (!visibleCampaigns.length) {
     wrap.style.display = 'none';
     tbody.innerHTML = '';
     meta.textContent = '';
@@ -1104,12 +1135,12 @@ function renderTrackingHistorySection() {
 
   wrap.style.display = 'block';
   const selectedId = getTrackingHistorySelectionId();
-  select.innerHTML = trackingCampaignHistory.map(campaign => {
+  select.innerHTML = visibleCampaigns.map(campaign => {
     const selected = campaign.id === selectedId ? ' selected' : '';
     return `<option value="${escapeHtml(campaign.id)}"${selected}>${escapeHtml(buildTrackingCampaignLabel(campaign))}</option>`;
   }).join('');
 
-  const campaign = getTrackingHistoryCampaignById(select.value || selectedId) || trackingCampaignHistory[0];
+  const campaign = getTrackingHistoryCampaignById(select.value || selectedId) || visibleCampaigns[0];
   if (!campaign) return;
 
   const counts = getTrackingCampaignCounts(campaign);
@@ -1130,39 +1161,42 @@ function handleTrackingHistorySelection() {
 }
 
 async function refreshSelectedTrackingHistory() {
-  const campaignId = document.getElementById('trackingHistorySelect')?.value || getTrackingHistorySelectionId();
-  const campaign = getTrackingHistoryCampaignById(campaignId);
-  if (!campaign) {
-    showToast('⚠️ No saved tracking campaign found in this browser yet.');
+  if (authProvider !== 'google' || !accessToken || !senderEmail) {
+    showToast('⚠️ Sign in with the Gmail account whose tracking history you want to load.');
     return;
   }
-  try {
-    const payload = await requestTrackingJsonp(campaign.endpoint, {
-      action: 'status',
-      key: campaign.statusKey,
-      campaign: campaign.id
-    });
-    if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
-    mergeTrackingStatusIntoCampaign(campaign, Array.isArray(payload.records) ? payload.records : []);
-    campaign.lastSyncedAt = new Date().toISOString();
-    upsertTrackingCampaignHistory(campaign);
-    if (trackingCampaign?.id === campaign.id) {
-      trackingCampaign = cloneTrackingCampaign(campaign);
-      renderTrackingPanel();
-      syncTrackingLogMessages();
-    }
-    showToast('Saved campaign refreshed.');
-  } catch (e) {
-    showToast(`⚠️ ${getTrackingRequestErrorMessage(e)}`);
-  }
+  await syncRemoteTrackingHistoryForCurrentUser(false);
 }
 
 function clearTrackingHistory() {
-  trackingCampaignHistory = [];
-  localStorage.removeItem(TRACKING_HISTORY_STORAGE_KEY);
-  localStorage.removeItem(TRACKING_HISTORY_SELECTION_KEY);
+  const sender = normalizeTrackingEmail(senderEmail);
+  if (sender) {
+    trackingCampaignHistory = trackingCampaignHistory.filter(campaign => normalizeTrackingEmail(campaign.senderEmail) !== sender);
+  } else {
+    trackingCampaignHistory = [];
+  }
+  persistTrackingCampaignHistory();
+  setTrackingHistorySelectionId('');
   renderTrackingHistorySection();
-  showToast('Saved tracking history cleared from this browser.');
+  showToast(sender ? 'Saved tracking history cleared for this account on this browser.' : 'Saved tracking history cleared from this browser.');
+}
+
+async function syncRemoteTrackingHistoryForCurrentUser(silent = true) {
+  if (authProvider !== 'google' || !accessToken || !senderEmail) return;
+  const cfg = getTrackingConfig();
+  if (!cfg.endpoint || !cfg.statusKey) return;
+  try {
+    const payload = await requestTrackingJsonp(cfg.endpoint, {
+      action: 'history',
+      key: cfg.statusKey,
+      token: accessToken
+    });
+    if (!payload?.ok) throw new Error(payload?.error || 'Tracking history fetch failed.');
+    mergeRemoteTrackingHistory(Array.isArray(payload.campaigns) ? payload.campaigns : []);
+    if (!silent) showToast('Tracking history synced.');
+  } catch (e) {
+    if (!silent) showToast(`⚠️ ${getTrackingRequestErrorMessage(e)}`);
+  }
 }
 
 function getTrackingConfig() {
@@ -1826,7 +1860,11 @@ async function registerTrackingSend(trackingRecord) {
     id: trackingRecord.id,
     email: trackingRecord.email,
     name: trackingRecord.name,
-    sentAt: trackingRecord.sentAt || new Date().toISOString()
+    sentAt: trackingRecord.sentAt || new Date().toISOString(),
+    senderEmail: trackingCampaign.senderEmail || senderEmail || '',
+    senderName: trackingCampaign.senderName || senderName || '',
+    provider: trackingCampaign.provider || authProvider || '',
+    subject: trackingRecord.subject || ''
   });
   if (!payload?.ok) throw new Error(payload?.error || 'Tracking registration failed.');
 }
