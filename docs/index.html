@@ -1247,27 +1247,47 @@ async function sendViaGmail(to, subject, body, trackingRecord = null) {
     } else {
       mimeMessage = buildMimePlain(to, subject, body, trackingRecord);
     }
-    let resp = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + accessToken,
-        'Content-Type': 'message/rfc822'
-      },
-      body: new TextEncoder().encode(mimeMessage)
-    });
-    let payload = await readResponsePayload(resp);
-    if (!resp.ok) {
-      const fallbackResp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    let resp = null;
+    let payload = null;
+    let uploadError = null;
+
+    try {
+      resp = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer ' + accessToken,
-          'Content-Type': 'application/json'
+          'Content-Type': 'message/rfc822'
         },
-        body: JSON.stringify({ raw: toBase64Url(mimeMessage) })
+        body: new TextEncoder().encode(mimeMessage)
       });
-      if (fallbackResp.ok) {
+      payload = await readResponsePayload(resp);
+    } catch (err) {
+      uploadError = err;
+    }
+
+    if (!resp || !resp.ok) {
+      try {
+        const fallbackResp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + accessToken,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ raw: toBase64Url(mimeMessage) })
+        });
+        const fallbackPayload = await readResponsePayload(fallbackResp);
         resp = fallbackResp;
-        payload = await readResponsePayload(fallbackResp);
+        payload = fallbackPayload;
+      } catch (fallbackErr) {
+        const detail = uploadError
+          ? 'Browser blocked Gmail attachment upload before the request completed.'
+          : 'Network error while sending with Gmail.';
+        return {
+          ok: false,
+          provider: 'google',
+          status: 0,
+          detail
+        };
       }
     }
     if (resp.status === 401) {
