@@ -494,6 +494,9 @@
 // Set these once and deploy if you want to preconfigure either provider.
 const PRECONFIGURED_GOOGLE_CLIENT_ID = '63345306559-v45do0gudb52caaktlp8e7l5j0ak8bog.apps.googleusercontent.com';
 const PRECONFIGURED_MICROSOFT_CLIENT_ID = 'b4852587-3020-44d0-bf4b-a8f82bfcc8ac';
+const PRECONFIGURED_TRACKING_ENABLED = true;
+const PRECONFIGURED_TRACKING_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFZlojQMxzp2qDC6QdipxZqy73bA44_JTlbomOzCCv2JCysNM2WpAsmF-yKIWW5pVx/exec';
+const PRECONFIGURED_TRACKING_STATUS_KEY = 'mailblast-open-2026-very-secret-48291';
 let googleClientId = PRECONFIGURED_GOOGLE_CLIENT_ID || localStorage.getItem('mb_google_client_id') || localStorage.getItem('mb_client_id') || '';
 let microsoftClientId = PRECONFIGURED_MICROSOFT_CLIENT_ID || localStorage.getItem('mb_microsoft_client_id') || '';
 let accessToken = null;
@@ -530,9 +533,9 @@ window.addEventListener('load', () => {
   document.getElementById('sendIntervalMinutes').value = savedInterval || String(DEFAULT_SEND_INTERVAL_MINUTES);
   const savedOptOut = localStorage.getItem('mb_include_opt_out');
   document.getElementById('includeOptOut').checked = savedOptOut === null ? true : savedOptOut === '1';
-  document.getElementById('enableOpenTracking').checked = localStorage.getItem('mb_tracking_enabled') === '1';
-  document.getElementById('trackingEndpoint').value = localStorage.getItem('mb_tracking_endpoint') || '';
-  document.getElementById('trackingStatusKey').value = localStorage.getItem('mb_tracking_status_key') || '';
+  document.getElementById('enableOpenTracking').checked = PRECONFIGURED_TRACKING_ENABLED || localStorage.getItem('mb_tracking_enabled') === '1';
+  document.getElementById('trackingEndpoint').value = PRECONFIGURED_TRACKING_ENDPOINT || localStorage.getItem('mb_tracking_endpoint') || '';
+  document.getElementById('trackingStatusKey').value = PRECONFIGURED_TRACKING_STATUS_KEY || localStorage.getItem('mb_tracking_status_key') || '';
   if (PRECONFIGURED_GOOGLE_CLIENT_ID) {
     googleClientId = PRECONFIGURED_GOOGLE_CLIENT_ID.trim();
     localStorage.setItem('mb_google_client_id', googleClientId);
@@ -541,6 +544,15 @@ window.addEventListener('load', () => {
   if (PRECONFIGURED_MICROSOFT_CLIENT_ID) {
     microsoftClientId = PRECONFIGURED_MICROSOFT_CLIENT_ID.trim();
     localStorage.setItem('mb_microsoft_client_id', microsoftClientId);
+  }
+  if (PRECONFIGURED_TRACKING_ENABLED) {
+    localStorage.setItem('mb_tracking_enabled', '1');
+  }
+  if (PRECONFIGURED_TRACKING_ENDPOINT) {
+    localStorage.setItem('mb_tracking_endpoint', PRECONFIGURED_TRACKING_ENDPOINT.trim());
+  }
+  if (PRECONFIGURED_TRACKING_STATUS_KEY) {
+    localStorage.setItem('mb_tracking_status_key', PRECONFIGURED_TRACKING_STATUS_KEY.trim());
   }
   if (googleClientId || microsoftClientId) {
     showMainApp();
