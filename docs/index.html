@@ -96,6 +96,15 @@
   .rec-table th { background: var(--surface); color: var(--text2); font-family: 'DM Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; padding: 9px 13px; text-align: left; border-bottom: 1px solid var(--border); position: sticky; top: 0; }
   .rec-table td { padding: 9px 13px; border-bottom: 1px solid var(--border); }
   .rec-table tr:last-child td { border-bottom: none; }
+  .history-campaign-list { margin-top: 14px; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+  .history-campaign-list::-webkit-scrollbar { width: 4px; }
+  .history-campaign-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+  .history-campaign-item { width: 100%; text-align: left; background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; color: var(--text); cursor: pointer; transition: border-color 0.18s, transform 0.18s, background 0.18s; }
+  .history-campaign-item:hover { border-color: rgba(232,255,71,0.3); transform: translateY(-1px); }
+  .history-campaign-item.active { border-color: rgba(232,255,71,0.42); background: rgba(232,255,71,0.05); }
+  .history-campaign-title { font-size: 14px; font-weight: 600; }
+  .history-campaign-sub { margin-top: 4px; font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.5; }
+  .history-empty { margin-top: 14px; padding: 14px; border-radius: 12px; border: 1px dashed var(--border2); background: rgba(255,255,255,0.02); font-size: 12px; color: var(--text2); line-height: 1.6; }
 
   /* PDF */
   .pdf-zone { border: 2px dashed var(--border2); border-radius: 8px; padding: 18px 20px; display: flex; align-items: center; gap: 14px; cursor: pointer; transition: all 0.2s; position: relative; }
@@ -327,12 +336,13 @@
         </div>
         <div id="trackingHistorySection" style="display:none;margin-top:18px;padding:18px;border:1px solid rgba(255,255,255,0.08);border-radius:18px;background:rgba(255,255,255,0.03)">
           <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px">Campaign History</div>
-          <div style="margin-top:6px;font-size:13px;color:var(--text2);line-height:1.6">This browser keeps your sent tracking campaigns so you can reopen and refresh them even after pressing Start Over.</div>
+          <div style="margin-top:6px;font-size:13px;color:var(--text2);line-height:1.6">Tracked Gmail campaigns are synced from your tracker sheet when you sign in with the same Gmail account. This browser also keeps a local cache so they reopen quickly after Start Over.</div>
           <div class="btn-row" style="margin-top:14px;align-items:center">
-            <select id="trackingHistorySelect" onchange="handleTrackingHistorySelection()" style="flex:1;min-width:240px"></select>
-            <button class="btn btn-ghost" style="padding:8px 14px" onclick="refreshSelectedTrackingHistory()">Refresh Selected</button>
-            <button class="btn btn-ghost" style="padding:8px 14px" onclick="clearTrackingHistory()">Clear History</button>
+            <button class="btn btn-ghost" style="padding:8px 14px" onclick="refreshSelectedTrackingHistory()">Refresh History</button>
+            <button class="btn btn-ghost" style="padding:8px 14px" onclick="clearTrackingHistory()">Clear Local Cache</button>
           </div>
+          <div id="trackingHistoryList" class="history-campaign-list"></div>
+          <div id="trackingHistoryEmpty" class="history-empty" style="display:none"></div>
           <div class="stat-row" style="margin-top:14px">
             <div class="stat-c"><div class="stat-n" id="histTracked">0</div><div class="stat-l">Tracked</div></div>
             <div class="stat-c"><div class="stat-n g" id="histOpened">0</div><div class="stat-l">Opened</div></div>
@@ -568,7 +578,7 @@ const MICROSOFT_SCRIPT_URLS = [
   'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
 ];
 const TRACKING_POLL_MS = 20000;
-const TRACKING_PREFETCH_WINDOW_MS = 2 * 60 * 1000;
+const TRACKING_PREFETCH_WINDOW_MS = 30 * 1000;
 const TRACKING_HISTORY_STORAGE_KEY = 'mb_tracking_campaign_history_v1';
 const TRACKING_HISTORY_SELECTION_KEY = 'mb_tracking_selected_campaign_id';
 const TRACKING_HISTORY_LIMIT = 25;
@@ -1005,6 +1015,8 @@ function loadTrackingCampaignHistory() {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(campaign => campaign && typeof campaign.id === 'string' && Array.isArray(campaign.records))
+      .map(campaign => normalizeTrackingCampaignSnapshot(campaign))
+      .filter(Boolean)
       .slice(0, TRACKING_HISTORY_LIMIT);
   } catch (e) {
     return [];
@@ -1050,7 +1062,8 @@ function getTrackingHistoryCampaignById(campaignId) {
 
 function upsertTrackingCampaignHistory(campaign) {
   if (!campaign?.id) return;
-  const snapshot = cloneTrackingCampaign(campaign);
+  const snapshot = normalizeTrackingCampaignSnapshot(campaign, getTrackingHistoryCampaignById(campaign.id));
+  if (!snapshot) return;
   trackingCampaignHistory = trackingCampaignHistory.filter(existing => existing.id !== snapshot.id);
   trackingCampaignHistory.unshift(snapshot);
   trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
@@ -1070,15 +1083,23 @@ function mergeRemoteTrackingHistory(campaigns) {
   const cfg = getTrackingConfig();
   remote.forEach(campaign => {
     if (!campaign || !campaign.id || !Array.isArray(campaign.records)) return;
-    const normalized = cloneTrackingCampaign(campaign);
-    normalized.endpoint = cfg.endpoint || normalized.endpoint || '';
-    normalized.statusKey = cfg.statusKey || normalized.statusKey || '';
+    const existing = getTrackingHistoryCampaignById(campaign.id) || (trackingCampaign?.id === campaign.id ? trackingCampaign : null);
+    const normalized = normalizeTrackingCampaignSnapshot({
+      ...campaign,
+      endpoint: cfg.endpoint || campaign.endpoint || '',
+      statusKey: cfg.statusKey || campaign.statusKey || ''
+    }, existing);
+    if (!normalized) return;
     trackingCampaignHistory = trackingCampaignHistory.filter(existing => existing.id !== normalized.id);
     trackingCampaignHistory.unshift(normalized);
+    if (trackingCampaign?.id === normalized.id) {
+      trackingCampaign = normalizeTrackingCampaignSnapshot(normalized, trackingCampaign);
+    }
   });
   trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
   trackingCampaignHistory = trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT);
   persistTrackingCampaignHistory();
+  renderTrackingPanel();
   renderTrackingHistorySection();
 }
 
@@ -1090,7 +1111,8 @@ function buildTrackingCampaignLabel(campaign) {
 }
 
 function getTrackingCampaignCounts(campaign) {
-  const records = Array.isArray(campaign?.records) ? campaign.records : [];
+  const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
+  const records = Array.isArray(normalized?.records) ? normalized.records : [];
   const tracked = records.filter(record => record.state !== 'failed').length;
   const opened = records.filter(record => record.state === 'opened').length;
   const prefetched = records.filter(record => record.state === 'prefetched').length;
@@ -1099,7 +1121,12 @@ function getTrackingCampaignCounts(campaign) {
 }
 
 function buildTrackingCampaignRowsHtml(campaign) {
-  return (campaign?.records || []).map(record => {
+  const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
+  const records = normalized?.records || [];
+  if (!records.length) {
+    return '<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:14px">No tracked recipients in this campaign yet.</td></tr>';
+  }
+  return records.map(record => {
     const label = record.name
       ? `${escapeHtml(record.email)} · <span class="log-name-txt">${escapeHtml(record.name)}</span>`
       : escapeHtml(record.email);
@@ -1120,27 +1147,50 @@ function buildTrackingCampaignRowsHtml(campaign) {
 
 function renderTrackingHistorySection() {
   const wrap = document.getElementById('trackingHistorySection');
-  const select = document.getElementById('trackingHistorySelect');
+  const list = document.getElementById('trackingHistoryList');
+  const empty = document.getElementById('trackingHistoryEmpty');
   const meta = document.getElementById('trackingHistoryMeta');
   const tbody = document.getElementById('trackingHistoryTbody');
-  if (!wrap || !select || !meta || !tbody) return;
+  if (!wrap || !list || !empty || !meta || !tbody) return;
 
   const visibleCampaigns = getVisibleTrackingCampaignHistory();
+  const canSyncRemotely = authProvider === 'google' && !!accessToken && !!senderEmail && !!getTrackingConfig().endpoint && !!getTrackingConfig().statusKey;
   if (!visibleCampaigns.length) {
-    wrap.style.display = 'none';
-    tbody.innerHTML = '';
-    meta.textContent = '';
+    wrap.style.display = canSyncRemotely ? 'block' : 'none';
+    list.innerHTML = '';
+    empty.style.display = canSyncRemotely ? 'block' : 'none';
+    empty.textContent = senderEmail
+      ? `No tracked Gmail campaigns have synced yet for ${senderEmail}. Click Refresh History to pull campaigns saved in the tracker sheet.`
+      : 'Sign in with the Gmail sender account to load synced tracked campaigns here.';
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:14px">No campaign selected yet.</td></tr>';
+    meta.textContent = canSyncRemotely
+      ? 'Campaign history stays shared through the tracker sheet, not just this browser.'
+      : '';
+    document.getElementById('histTracked').textContent = '0';
+    document.getElementById('histOpened').textContent = '0';
+    document.getElementById('histPrefetched').textContent = '0';
+    document.getElementById('histPending').textContent = '0';
     return;
   }
 
   wrap.style.display = 'block';
+  empty.style.display = 'none';
   const selectedId = getTrackingHistorySelectionId();
-  select.innerHTML = visibleCampaigns.map(campaign => {
-    const selected = campaign.id === selectedId ? ' selected' : '';
-    return `<option value="${escapeHtml(campaign.id)}"${selected}>${escapeHtml(buildTrackingCampaignLabel(campaign))}</option>`;
-  }).join('');
+  list.innerHTML = '';
+  visibleCampaigns.forEach(campaign => {
+    const counts = getTrackingCampaignCounts(campaign);
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `history-campaign-item${campaign.id === selectedId ? ' active' : ''}`;
+    item.innerHTML = `
+      <div class="history-campaign-title">${escapeHtml(buildTrackingCampaignLabel(campaign))}</div>
+      <div class="history-campaign-sub">${escapeHtml(buildTrackingCampaignSummary(campaign, counts))}</div>
+    `;
+    item.addEventListener('click', () => selectTrackingHistoryCampaign(campaign.id));
+    list.appendChild(item);
+  });
 
-  const campaign = getTrackingHistoryCampaignById(select.value || selectedId) || visibleCampaigns[0];
+  const campaign = normalizeTrackingCampaignSnapshot(getTrackingHistoryCampaignById(selectedId) || visibleCampaigns[0]);
   if (!campaign) return;
 
   const counts = getTrackingCampaignCounts(campaign);
@@ -1154,9 +1204,8 @@ function renderTrackingHistorySection() {
   tbody.innerHTML = buildTrackingCampaignRowsHtml(campaign);
 }
 
-function handleTrackingHistorySelection() {
-  const select = document.getElementById('trackingHistorySelect');
-  setTrackingHistorySelectionId(select?.value || '');
+function selectTrackingHistoryCampaign(campaignId) {
+  setTrackingHistorySelectionId(campaignId || '');
   renderTrackingHistorySection();
 }
 
@@ -1224,7 +1273,7 @@ function updateTrackingSettingsUi() {
     return;
   }
 
-  help.textContent = 'Tracked Gmail emails include a tiny image that logs opens to your tracker endpoint. Outlook and Microsoft 365 often preload or security-scan images, so some hits are classified as likely auto-fetch instead of real opens.';
+  help.textContent = 'Tracked Gmail emails include a tiny image that logs opens to your tracker endpoint. Only single hits that arrive almost immediately after send are marked as likely auto-fetch, so real opens are less likely to get stuck there.';
 }
 
 function getTrackingValidationError() {
@@ -1840,6 +1889,66 @@ function createTrackingCampaign(recipientList, cfg) {
   };
 }
 
+function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
+  if (!campaign?.id) return null;
+  const existingById = new Map((existingCampaign?.records || []).map(record => [String(record?.id || ''), record]));
+  const rawRecords = Array.isArray(campaign.records) ? campaign.records : [];
+  const records = rawRecords.map((rawRecord, index) => {
+    const recordId = String(rawRecord?.id || '');
+    const existingRecord = existingById.get(recordId) || {};
+    const record = {
+      id: recordId,
+      email: normalizeTrackingEmail(rawRecord?.email || existingRecord.email || ''),
+      name: String(rawRecord?.name || existingRecord.name || ''),
+      subject: String(rawRecord?.subject || existingRecord.subject || ''),
+      logIndex: rawRecord?.logIndex ?? existingRecord.logIndex ?? index,
+      sentAt: String(rawRecord?.sentAt || existingRecord.sentAt || ''),
+      state: String(rawRecord?.state || existingRecord.state || ''),
+      openCount: Number(rawRecord?.openCount || rawRecord?.opens || existingRecord.openCount || 0),
+      openedAt: String(rawRecord?.openedAt || rawRecord?.lastOpenedAt || rawRecord?.firstOpenedAt || existingRecord.openedAt || ''),
+      firstOpenedAt: String(rawRecord?.firstOpenedAt || existingRecord.firstOpenedAt || ''),
+      lastOpenedAt: String(rawRecord?.lastOpenedAt || existingRecord.lastOpenedAt || '')
+    };
+
+    if (!record.firstOpenedAt && record.openedAt) record.firstOpenedAt = record.openedAt;
+    if (!record.lastOpenedAt && record.openedAt) record.lastOpenedAt = record.openedAt;
+    if (record.state === 'failed') return record;
+
+    if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
+      record.openedAt = record.lastOpenedAt || record.firstOpenedAt || record.openedAt;
+      record.state = isLikelyPrefetchedOpen(record) ? 'prefetched' : 'opened';
+    } else if (record.state !== 'error') {
+      record.state = record.sentAt ? 'pending' : 'queued';
+    }
+    return record;
+  }).filter(record => record.id);
+
+  return {
+    id: String(campaign.id || existingCampaign?.id || ''),
+    endpoint: String(campaign.endpoint || existingCampaign?.endpoint || ''),
+    statusKey: String(campaign.statusKey || existingCampaign?.statusKey || ''),
+    createdAt: String(campaign.createdAt || existingCampaign?.createdAt || records[0]?.sentAt || ''),
+    senderEmail: normalizeTrackingEmail(campaign.senderEmail || existingCampaign?.senderEmail || ''),
+    senderName: String(campaign.senderName || existingCampaign?.senderName || ''),
+    provider: String(campaign.provider || existingCampaign?.provider || ''),
+    records,
+    lastSyncedAt: String(campaign.lastSyncedAt || existingCampaign?.lastSyncedAt || '')
+  };
+}
+
+function buildTrackingCampaignSummary(campaign, counts = getTrackingCampaignCounts(campaign)) {
+  const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
+  const recipientsCount = Array.isArray(normalized?.records) ? normalized.records.length : 0;
+  const parts = [
+    `${recipientsCount} recipient${recipientsCount === 1 ? '' : 's'}`,
+    `${counts.opened} opened`,
+    counts.prefetched ? `${counts.prefetched} auto-fetch` : `${counts.pending} pending`
+  ];
+  const subject = String((normalized?.records || []).find(record => record?.subject)?.subject || '').trim();
+  if (subject) parts.push(trimText(subject, 58));
+  return parts.join(' · ');
+}
+
 function buildTrackingPixelHtml(trackingRecord) {
   if (!trackingRecord || !trackingCampaign?.endpoint) return '';
   const pixelUrl = buildTrackerUrl(trackingCampaign.endpoint, {
@@ -2011,7 +2120,7 @@ function requestTrackingJsonp(endpoint, params) {
     script.onerror = () => {
       clearTimeout(timer);
       cleanup();
-      reject(new Error('Tracker endpoint could not be loaded. Check that the Apps Script web app is deployed for Anyone.'));
+      reject(new Error('Tracker endpoint could not be loaded. Redeploy the Apps Script web app, grant access to Anyone, and update the /exec URL if it changed.'));
     };
     script.src = url;
     document.head.appendChild(script);
@@ -2371,6 +2480,12 @@ function formatDateTime(isoString) {
     hour: 'numeric',
     minute: '2-digit'
   });
+}
+
+function trimText(text, maxLength = 72) {
+  const clean = sanitizeHeaderValue(text);
+  if (clean.length <= maxLength) return clean;
+  return `${clean.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 // CSV drag-drop
