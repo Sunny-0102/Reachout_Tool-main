@@ -6,7 +6,8 @@ const TRACKER_HEADERS = [
   'email',
   'name',
   'sentAt',
-  'openedAt',
+  'firstOpenedAt',
+  'lastOpenedAt',
   'openCount',
   'createdAt',
   'updatedAt'
@@ -39,18 +40,19 @@ function registerSend_(e) {
     param_(e, 'name'),
     param_(e, 'sentAt') || now,
     '',
+    '',
     0,
     now,
     now
   ];
 
   if (rowNumber > 1) {
-    const existing = sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length).getValues()[0];
+    const existing = normalizeTrackerRow_(sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length).getValues()[0]);
     existing[1] = campaign;
     existing[2] = email;
     existing[3] = param_(e, 'name');
     existing[4] = param_(e, 'sentAt') || existing[4] || now;
-    existing[8] = now;
+    existing[9] = now;
     sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length).setValues([existing]);
   } else {
     sheet.appendRow(record);
@@ -79,8 +81,10 @@ function getCampaignStatus_(e) {
         email: String(row[2] || ''),
         name: String(row[3] || ''),
         sentAt: String(row[4] || ''),
-        openedAt: String(row[5] || ''),
-        openCount: Number(row[6] || 0)
+        firstOpenedAt: String(row[5] || ''),
+        lastOpenedAt: String(row[6] || ''),
+        openedAt: String(row[6] || row[5] || ''),
+        openCount: Number(row[7] || 0)
       };
     });
 
@@ -95,11 +99,12 @@ function logOpen_(e) {
   const rowNumber = findRowNumberById_(sheet, id);
   if (rowNumber > 1) {
     const range = sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length);
-    const row = range.getValues()[0];
+    const row = normalizeTrackerRow_(range.getValues()[0]);
     const now = new Date().toISOString();
-    row[5] = now;
-    row[6] = Number(row[6] || 0) + 1;
-    row[8] = now;
+    if (!row[5]) row[5] = now;
+    row[6] = now;
+    row[7] = Number(row[7] || 0) + 1;
+    row[9] = now;
     range.setValues([row]);
   }
 
@@ -144,7 +149,14 @@ function getTrackerSheet_() {
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
   let sheet = spreadsheet.getSheetByName(TRACKER_SHEET_NAME);
   if (!sheet) sheet = spreadsheet.insertSheet(TRACKER_SHEET_NAME);
-  if (sheet.getLastRow() === 0) sheet.appendRow(TRACKER_HEADERS);
+  if (sheet.getMaxColumns() < TRACKER_HEADERS.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), TRACKER_HEADERS.length - sheet.getMaxColumns());
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, TRACKER_HEADERS.length).setValues([TRACKER_HEADERS]);
+  } else {
+    sheet.getRange(1, 1, 1, TRACKER_HEADERS.length).setValues([TRACKER_HEADERS]);
+  }
   return sheet;
 }
 
@@ -156,4 +168,23 @@ function findRowNumberById_(sheet, id) {
     if (String(ids[i][0] || '') === id) return i + 2;
   }
   return -1;
+}
+
+function normalizeTrackerRow_(row) {
+  if (row.length >= TRACKER_HEADERS.length) return row.slice(0, TRACKER_HEADERS.length);
+
+  const normalized = new Array(TRACKER_HEADERS.length).fill('');
+  normalized[0] = row[0] || '';
+  normalized[1] = row[1] || '';
+  normalized[2] = row[2] || '';
+  normalized[3] = row[3] || '';
+  normalized[4] = row[4] || '';
+
+  // Backfill rows created before firstOpenedAt/lastOpenedAt existed.
+  normalized[5] = row[5] || '';
+  normalized[6] = row[5] || '';
+  normalized[7] = Number(row[6] || 0);
+  normalized[8] = row[7] || new Date().toISOString();
+  normalized[9] = row[8] || normalized[8];
+  return normalized;
 }

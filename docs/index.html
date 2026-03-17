@@ -453,6 +453,7 @@
           <div class="stat-row" style="margin-top:0">
             <div class="stat-c"><div class="stat-n" id="trackTracked">0</div><div class="stat-l">Tracked</div></div>
             <div class="stat-c"><div class="stat-n g" id="trackOpened">0</div><div class="stat-l">Opened</div></div>
+            <div class="stat-c"><div class="stat-n" id="trackPrefetched">0</div><div class="stat-l">Auto-fetch</div></div>
             <div class="stat-c"><div class="stat-n" id="trackPending">0</div><div class="stat-l">Pending</div></div>
           </div>
           <div id="trackingMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">Tracking is off.</div>
@@ -537,6 +538,7 @@ const MICROSOFT_SCRIPT_URLS = [
   'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
 ];
 const TRACKING_POLL_MS = 20000;
+const TRACKING_PREFETCH_WINDOW_MS = 2 * 60 * 1000;
 
 // ==================== INIT ====================
 window.addEventListener('load', () => {
@@ -983,7 +985,7 @@ function updateTrackingSettingsUi() {
     return;
   }
 
-  help.textContent = 'Tracked Gmail emails include a tiny image that logs opens to your tracker endpoint. Some mail clients block, cache, or preload images, so opens are approximate.';
+  help.textContent = 'Tracked Gmail emails include a tiny image that logs opens to your tracker endpoint. Outlook and Microsoft 365 often preload or security-scan images, so some hits are classified as likely auto-fetch instead of real opens.';
 }
 
 function getTrackingValidationError() {
@@ -1581,7 +1583,9 @@ function createTrackingCampaign(recipientList, cfg) {
       sentAt: '',
       state: 'queued',
       openCount: 0,
-      openedAt: ''
+      openedAt: '',
+      firstOpenedAt: '',
+      lastOpenedAt: ''
     })),
     lastSyncedAt: ''
   };
@@ -1640,15 +1644,26 @@ function mergeTrackingStatus(records) {
     const hit = byId.get(record.id);
     if (!hit) return;
     const openCount = Number(hit.openCount || hit.opens || 0);
-    const openedAt = String(hit.openedAt || hit.lastOpenedAt || '').trim();
-    if (openCount > 0 || openedAt) {
-      record.state = 'opened';
+    const firstOpenedAt = String(hit.firstOpenedAt || hit.openedAt || '').trim();
+    const lastOpenedAt = String(hit.lastOpenedAt || hit.openedAt || '').trim();
+    if (openCount > 0 || firstOpenedAt || lastOpenedAt) {
       record.openCount = openCount || 1;
-      record.openedAt = openedAt || record.openedAt;
+      record.firstOpenedAt = firstOpenedAt || record.firstOpenedAt;
+      record.lastOpenedAt = lastOpenedAt || record.lastOpenedAt;
+      record.openedAt = lastOpenedAt || firstOpenedAt || record.openedAt;
+      record.state = isLikelyPrefetchedOpen(record) ? 'prefetched' : 'opened';
     } else if (record.state !== 'error' && record.state !== 'failed') {
       record.state = 'pending';
     }
   });
+}
+
+function isLikelyPrefetchedOpen(record) {
+  if ((record.openCount || 0) !== 1) return false;
+  const sentMs = Date.parse(record.sentAt || '');
+  const firstOpenMs = Date.parse(record.firstOpenedAt || record.openedAt || '');
+  if (!Number.isFinite(sentMs) || !Number.isFinite(firstOpenMs)) return false;
+  return firstOpenMs >= sentMs && firstOpenMs - sentMs <= TRACKING_PREFETCH_WINDOW_MS;
 }
 
 function renderTrackingPanel() {
@@ -1667,13 +1682,15 @@ function renderTrackingPanel() {
   wrap.style.display = 'block';
   const tracked = trackingCampaign.records.filter(record => record.state !== 'failed').length;
   const opened = trackingCampaign.records.filter(record => record.state === 'opened').length;
-  const pending = Math.max(tracked - opened - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
+  const prefetched = trackingCampaign.records.filter(record => record.state === 'prefetched').length;
+  const pending = Math.max(tracked - opened - prefetched - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
 
   document.getElementById('trackTracked').textContent = tracked;
   document.getElementById('trackOpened').textContent = opened;
+  document.getElementById('trackPrefetched').textContent = prefetched;
   document.getElementById('trackPending').textContent = pending;
   meta.textContent = trackingCampaign.lastSyncedAt
-    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)}`
+    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)} · Outlook/Microsoft 365 auto-fetches may be shown separately`
     : `Campaign ${trackingCampaign.id} · waiting for the first refresh`;
 
   tbody.innerHTML = trackingCampaign.records.map(record => {
@@ -1682,13 +1699,15 @@ function renderTrackingPanel() {
       : escapeHtml(record.email);
     const status = record.state === 'opened'
       ? 'Opened'
+      : record.state === 'prefetched'
+        ? 'Likely auto-fetch'
       : record.state === 'error'
         ? 'Tracking error'
         : record.state === 'failed'
           ? 'Not sent'
           : 'Pending';
     const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
-    const openCount = record.state === 'opened' ? String(record.openCount || 1) : '—';
+    const openCount = record.state === 'opened' || record.state === 'prefetched' ? String(record.openCount || 1) : '—';
     return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
   }).join('');
 }
@@ -1700,6 +1719,8 @@ function syncTrackingLogMessages() {
     if (record.state === 'opened') {
       const suffix = record.openCount > 1 ? ` · ${record.openCount} opens` : '';
       setStatus(record.logIndex, 'sent', `Sent ✓ · opened ${formatDateTime(record.openedAt)}${suffix}`);
+    } else if (record.state === 'prefetched') {
+      setStatus(record.logIndex, 'sent', `Sent ✓ · likely auto-fetched ${formatDateTime(record.openedAt)}`);
     } else if (record.state === 'pending') {
       setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking pending');
     } else if (record.state === 'error') {
