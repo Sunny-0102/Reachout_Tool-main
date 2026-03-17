@@ -216,20 +216,27 @@
         </div>
         <div class="setup-step">
           <div class="setup-step-num">3</div>
-          <div>For Outlook / Microsoft 365: go to <a href="https://portal.azure.com/" target="_blank">Microsoft Entra / Azure Portal</a> → App registrations → create an app → set supported account types to include <strong style="color:var(--text)">personal</strong> and, if needed, <strong style="color:var(--text)">work or school</strong> accounts.</div>
+          <div>In Google Auth Platform → <strong style="color:var(--text)">Audience</strong>, if the app is <strong style="color:var(--text)">External</strong> and still in <strong style="color:var(--text)">Testing</strong>, add every Gmail address you want to use under <strong style="color:var(--text)">Test users</strong>. Otherwise Google will show <span style="color:var(--text)">Error 403: access_denied</span>.</div>
         </div>
         <div class="setup-step">
           <div class="setup-step-num">4</div>
-          <div>Under <strong style="color:var(--text)">Authentication</strong>, add a <strong style="color:var(--text)">Single-page application</strong> redirect URI using this exact page URL: <code id="currentRedirectUri"></code></div>
+          <div>For Outlook / Microsoft 365: go to <a href="https://portal.azure.com/" target="_blank">Microsoft Entra / Azure Portal</a> → App registrations → create an app → set supported account types to include <strong style="color:var(--text)">personal</strong> and, if needed, <strong style="color:var(--text)">work or school</strong> accounts.</div>
         </div>
         <div class="setup-step">
           <div class="setup-step-num">5</div>
+          <div>Under <strong style="color:var(--text)">Authentication</strong>, add a <strong style="color:var(--text)">Single-page application</strong> redirect URI using this exact page URL: <code id="currentRedirectUri"></code></div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-step-num">6</div>
           <div>For Microsoft permissions, add delegated <strong style="color:var(--text)">Mail.Send</strong> and <strong style="color:var(--text)">User.Read</strong>. Some school tenants may also require admin consent.</div>
         </div>
       </div>
       <div class="field">
         <label>Google OAuth Client ID</label>
         <input type="text" id="clientIdInput" placeholder="xxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com" />
+      </div>
+      <div style="margin:-6px 0 16px;font-size:12px;color:var(--text2);line-height:1.6;">
+        If another Gmail account gets blocked during sign-in, open the Google Cloud project for this client ID and add that Gmail under <span style="color:var(--text)">Google Auth Platform → Audience → Test users</span>, or move the OAuth app to production after Google verification.
       </div>
       <div class="field">
         <label>Microsoft Entra Application (Client) ID</label>
@@ -298,13 +305,13 @@
           </div>
         </div>
         <div class="fld">
-          <label>Attachment <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(optional PDF)</span></label>
+          <label>Attachment <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(optional file)</span></label>
           <div class="pdf-zone" id="pdfZone">
-            <input type="file" accept=".pdf" id="pdfFile" onchange="handlePdf(event)" />
+            <input type="file" id="pdfFile" onchange="handleAttachment(event)" />
             <span style="font-size:24px">📎</span>
             <div>
-              <div style="font-size:13px;color:var(--text2);">Attach a PDF to every email</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px;font-family:'DM Mono',monospace;">Click or drag a .pdf · Max 10MB</div>
+              <div style="font-size:13px;color:var(--text2);">Attach one file to every email</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px;font-family:'DM Mono',monospace;">Click or drag a file · Max 10MB</div>
             </div>
           </div>
           <div id="pdfChip" style="display:none;margin-top:10px" class="pdf-chip">
@@ -432,9 +439,10 @@
         <div id="sendIntervalInfo" style="margin-bottom:10px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px;"></div>
         <div class="prog-wrap"><div class="prog-fill" id="progFill"></div></div>
         <div id="doneBanner" style="display:none" class="done-banner">✅ Campaign complete! All emails sent.</div>
+        <div id="deliveryNote" style="display:none;margin-top:10px;font-size:12px;color:var(--text2);line-height:1.6;"></div>
         <div class="stat-row" id="statRow" style="display:none">
           <div class="stat-c"><div class="stat-n" id="stTotal">0</div><div class="stat-l">Total</div></div>
-          <div class="stat-c"><div class="stat-n g" id="stSent">0</div><div class="stat-l">Sent</div></div>
+          <div class="stat-c"><div class="stat-n g" id="stSent">0</div><div class="stat-l" id="stSentLabel">Sent</div></div>
           <div class="stat-c"><div class="stat-n r" id="stFailed">0</div><div class="stat-l">Failed</div></div>
         </div>
         <div id="trackingWrap" style="display:none;margin-top:18px">
@@ -519,6 +527,7 @@ let trackingCampaign = null;
 let trackingPollTimer = null;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SEND_INTERVAL_MINUTES = 2;
+const MICROSOFT_INLINE_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024;
 const MICROSOFT_SCOPES = ['User.Read', 'Mail.Send'];
 const MICROSOFT_AUTHORITY = 'https://login.microsoftonline.com/common';
 const MICROSOFT_LOCALHOST_HINT = 'http://localhost:PORT/index.html';
@@ -634,31 +643,41 @@ function updateAuthButtons() {
     hint.textContent = `Serve this page from http://localhost or https://, then add that exact URL in Microsoft Entra. Example: ${MICROSOFT_LOCALHOST_HINT}`;
     return;
   }
+  if (googleClientId && !microsoftClientId) {
+    hint.textContent = 'Gmail ready. If another Google account gets Error 403 access_denied, add it as a Google OAuth test user or use a verified production client.';
+    return;
+  }
   hint.textContent = ready.length ? ready.join(' · ') : 'Add a client ID in setup before signing in.';
 }
 
 // ==================== AUTH ====================
-function startGoogleAuth() {
+async function startGoogleAuth() {
   if (!googleClientId) {
     showToast('⚠️ Add a Google client ID first.');
     showSetup();
     return;
   }
+  if (authProvider === 'google' && accessToken) {
+    await revokeGoogleAccess();
+    resetAuthState();
+  }
   const client = google.accounts.oauth2.initTokenClient({
     client_id: googleClientId,
     scope: 'https://www.googleapis.com/auth/gmail.send email profile',
     callback: (resp) => {
-      if (resp.error) { showToast('❌ Auth failed: ' + resp.error); return; }
+      if (resp.error) {
+        showToast(`❌ ${getGoogleAuthErrorMessage(resp)}`);
+        return;
+      }
       accessToken = resp.access_token;
       authProvider = 'google';
       fetchGoogleUserInfo();
     },
     error_callback: (err) => {
-      const kind = err?.type ? ` (${err.type})` : '';
-      showToast(`❌ Google sign-in failed${kind}.`);
+      showToast(`❌ ${getGoogleAuthErrorMessage(err)}`);
     },
   });
-  client.requestAccessToken({ prompt: 'select_account' });
+  client.requestAccessToken({ prompt: 'consent select_account' });
 }
 
 async function fetchGoogleUserInfo() {
@@ -966,14 +985,19 @@ function getTrackingValidationError() {
   return '';
 }
 
-// ==================== PDF ====================
-function handlePdf(event) {
+// ==================== ATTACHMENT ====================
+function handleAttachment(event) {
   const file = event.target.files[0]; if (!file) return;
-  if (file.size > 10*1024*1024) { showToast('⚠️ PDF must be under 10MB.'); return; }
+  if (file.size > 10*1024*1024) { showToast('⚠️ Attachment must be under 10MB.'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const b64 = e.target.result.split(',')[1];
-    attachedPdf = { name: file.name, size: file.size, base64: b64, mimeType: 'application/pdf' };
+    attachedPdf = {
+      name: file.name,
+      size: file.size,
+      base64: b64,
+      mimeType: file.type || guessMimeTypeFromName(file.name)
+    };
     document.getElementById('pdfZone').style.display = 'none';
     document.getElementById('pdfChip').style.display = 'flex';
     document.getElementById('pdfName').textContent = file.name;
@@ -1115,18 +1139,29 @@ async function startSending() {
     navigateStep(3);
     return;
   }
+  const attachmentError = getAttachmentValidationError();
+  if (attachmentError) {
+    showToast(`⚠️ ${attachmentError}`);
+    navigateStep(3);
+    return;
+  }
   trackingCampaign = shouldTrackOpens()
     ? createTrackingCampaign(recipients, getTrackingConfig())
     : null;
   renderTrackingPanel();
 
   sentCount = 0; failedCount = 0;
+  let pendingDeliveryCount = 0;
   const total = recipients.length;
   document.getElementById('sendCount').textContent = `0 / ${total}`;
   document.getElementById('statRow').style.display = 'flex';
   document.getElementById('stTotal').textContent = total;
+  document.getElementById('stSentLabel').textContent = authProvider === 'microsoft' ? 'Accepted' : 'Sent';
   document.getElementById('sendIntervalInfo').textContent = `INTERVAL: ${formatIntervalText(sendIntervalMinutes)}`;
   document.getElementById('sendTitle').textContent = `Sending via ${getProviderLabel()}…`;
+  document.getElementById('doneBanner').style.display = 'none';
+  document.getElementById('deliveryNote').style.display = 'none';
+  document.getElementById('deliveryNote').textContent = '';
 
   const log = document.getElementById('emailLog');
   log.innerHTML = '';
@@ -1145,9 +1180,11 @@ async function startSending() {
     setStatus(i, 'sending', 'Sending…');
     document.getElementById(`log-${i}`).scrollIntoView({ behavior:'smooth', block:'nearest' });
 
-    const ok = await sendEmail(rec.email, subj, body, trackingRecord);
+    const result = await sendEmail(rec.email, subj, body, trackingRecord);
+    const ok = !!result?.ok;
     if (ok) {
       sentCount++;
+      if (result.provider === 'microsoft') pendingDeliveryCount++;
       if (trackingRecord) {
         trackingRecord.sentAt = new Date().toISOString();
         trackingRecord.subject = subj;
@@ -1155,18 +1192,18 @@ async function startSending() {
         try {
           await registerTrackingSend(trackingRecord);
           trackingRecord.state = 'pending';
-          setStatus(i, 'sent', 'Sent ✓ · tracking pending');
+          setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
         } catch (e) {
           trackingRecord.state = 'error';
-          setStatus(i, 'sent', 'Sent ✓ · tracking registration failed');
+          setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
         }
       } else {
-        setStatus(i,'sent','Sent ✓');
+        setStatus(i, 'sent', formatSuccessStatus(result));
       }
     } else {
       failedCount++;
       if (trackingRecord) trackingRecord.state = 'failed';
-      setStatus(i,'failed','Failed ✗');
+      setStatus(i, 'failed', formatFailureStatus(result));
     }
 
     const done = i+1;
@@ -1176,20 +1213,20 @@ async function startSending() {
     document.getElementById('stFailed').textContent = failedCount;
 
     if (i < recipients.length - 1 && sendIntervalMs > 0) {
-      const waitPrefix = ok
-        ? trackingRecord
-          ? trackingRecord.state === 'error'
-            ? 'Sent ✓ · tracking registration failed'
-            : 'Sent ✓ · tracking pending'
-          : 'Sent ✓'
-        : 'Failed ✗';
+      const waitPrefix = ok ? formatSuccessStatus(result, trackingRecord) : formatFailureStatus(result);
       setStatus(i, ok ? 'sent' : 'failed', `${waitPrefix} · waiting ${formatIntervalText(sendIntervalMinutes)}`);
       await sleep(sendIntervalMs);
     }
   }
 
   document.getElementById('sendTitle').textContent = 'Campaign Complete!';
-  document.getElementById('doneBanner').style.display = 'flex';
+  const doneBanner = document.getElementById('doneBanner');
+  doneBanner.textContent = buildCompletionBanner(authProvider, sentCount, failedCount);
+  doneBanner.style.display = 'flex';
+  const deliveryNote = document.getElementById('deliveryNote');
+  const deliveryText = buildDeliveryNote(authProvider, pendingDeliveryCount);
+  deliveryNote.textContent = deliveryText;
+  deliveryNote.style.display = deliveryText ? 'block' : 'none';
   document.getElementById('doneActions').style.display = 'flex';
   renderTrackingPanel();
   if (trackingCampaign) startTrackingPolling();
@@ -1204,26 +1241,68 @@ async function sendEmail(to, subject, body, trackingRecord = null) {
 
 async function sendViaGmail(to, subject, body, trackingRecord = null) {
   try {
-    let raw;
+    let mimeMessage;
     if (attachedPdf) {
-      raw = buildMimeWithAttachment(to, subject, body, attachedPdf, trackingRecord);
+      mimeMessage = buildMimeWithAttachment(to, subject, body, attachedPdf, trackingRecord);
     } else {
-      raw = buildMimePlain(to, subject, body, trackingRecord);
+      mimeMessage = buildMimePlain(to, subject, body, trackingRecord);
     }
-    const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    let resp = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + accessToken,
-        'Content-Type': 'application/json'
+        'Content-Type': 'message/rfc822'
       },
-      body: JSON.stringify({ raw })
+      body: new TextEncoder().encode(mimeMessage)
     });
+    let payload = await readResponsePayload(resp);
+    if (!resp.ok) {
+      const fallbackResp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + accessToken,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ raw: toBase64Url(mimeMessage) })
+      });
+      if (fallbackResp.ok) {
+        resp = fallbackResp;
+        payload = await readResponsePayload(fallbackResp);
+      }
+    }
     if (resp.status === 401) {
       showToast('⚠️ Session expired. Please sign in again.');
-      signOut(); return false;
+      signOut();
+      return {
+        ok: false,
+        provider: 'google',
+        status: resp.status,
+        detail: 'Session expired. Please sign in again.'
+      };
     }
-    return resp.ok;
-  } catch(e) { return false; }
+    if (!resp.ok) {
+      return {
+        ok: false,
+        provider: 'google',
+        status: resp.status,
+        detail: getSendErrorDetail('google', resp.status, payload)
+      };
+    }
+    return {
+      ok: true,
+      provider: 'google',
+      status: resp.status,
+      messageId: String(payload?.id || ''),
+      threadId: String(payload?.threadId || '')
+    };
+  } catch(e) {
+    return {
+      ok: false,
+      provider: 'google',
+      status: 0,
+      detail: 'Network error while sending with Gmail.'
+    };
+  }
 }
 
 async function sendViaMicrosoft(to, subject, body) {
@@ -1259,18 +1338,47 @@ async function sendViaMicrosoft(to, subject, body) {
       },
       body: JSON.stringify(payload)
     });
+    const payloadData = await readResponsePayload(resp);
     if (resp.status === 401) {
       showToast('⚠️ Microsoft session expired. Please sign in again.');
       signOut();
-      return false;
+      return {
+        ok: false,
+        provider: 'microsoft',
+        status: resp.status,
+        detail: 'Microsoft session expired. Please sign in again.'
+      };
     }
     if (resp.status === 403) {
       showToast('⚠️ Microsoft tenant blocked sending. Admin consent may be required.');
-      return false;
+      return {
+        ok: false,
+        provider: 'microsoft',
+        status: resp.status,
+        detail: getSendErrorDetail('microsoft', resp.status, payloadData)
+      };
     }
-    return resp.ok;
+    if (!resp.ok) {
+      return {
+        ok: false,
+        provider: 'microsoft',
+        status: resp.status,
+        detail: getSendErrorDetail('microsoft', resp.status, payloadData)
+      };
+    }
+    return {
+      ok: true,
+      provider: 'microsoft',
+      status: resp.status,
+      requestId: resp.headers.get('request-id') || ''
+    };
   } catch (e) {
-    return false;
+    return {
+      ok: false,
+      provider: 'microsoft',
+      status: 0,
+      detail: 'Network error while sending with Microsoft 365.'
+    };
   }
 }
 
@@ -1303,7 +1411,7 @@ function buildMimePlain(to, subject, body, trackingRecord = null) {
     ``,
     `--${altBoundary}--`
   ].join('\r\n');
-  return toBase64Url(msg);
+  return msg;
 }
 
 function buildMimeWithAttachment(to, subject, body, pdf, trackingRecord = null) {
@@ -1350,7 +1458,7 @@ function buildMimeWithAttachment(to, subject, body, pdf, trackingRecord = null) 
     ``,
     `--${mixedBoundary}--`
   ].join('\r\n');
-  return toBase64Url(parts);
+  return parts;
 }
 
 function setStatus(i, status, msg) {
@@ -1364,6 +1472,92 @@ function setStatus(i, status, msg) {
   else if (status==='sent') dot.innerHTML = '✓';
   else if (status==='failed') dot.innerHTML = '✗';
   else dot.innerHTML = '';
+}
+
+function getAttachmentValidationError() {
+  if (!attachedPdf) return '';
+  if (authProvider === 'microsoft' && Number(attachedPdf.size || 0) > MICROSOFT_INLINE_ATTACHMENT_MAX_BYTES) {
+    return 'Microsoft 365 direct send in this app only supports attachments smaller than 3 MB. Use a smaller PDF or send through Gmail.';
+  }
+  return '';
+}
+
+async function readResponsePayload(resp) {
+  const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    try {
+      return await resp.json();
+    } catch (e) {}
+  }
+  try {
+    const text = await resp.text();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return text;
+    }
+  } catch (e) {
+    return null;
+  }
+}
+
+function getPayloadErrorMessage(payload) {
+  if (!payload) return '';
+  if (typeof payload === 'string') return sanitizeHeaderValue(payload).slice(0, 180);
+  return sanitizeHeaderValue(
+    payload?.error?.message ||
+    payload?.error_description ||
+    payload?.message ||
+    ''
+  ).slice(0, 180);
+}
+
+function getSendErrorDetail(provider, status, payload) {
+  const apiMessage = getPayloadErrorMessage(payload);
+  if (provider === 'microsoft') {
+    if (status === 403) return apiMessage || 'Microsoft 365 blocked the send. Admin consent or mailbox permissions may be missing.';
+    if (status === 413) return 'Attachment is too large for Microsoft 365 direct send in this app.';
+    if (status === 400) return apiMessage || 'Microsoft 365 rejected the message request.';
+  }
+  if (provider === 'google') {
+    if (status === 400) return apiMessage || 'Gmail rejected the message format.';
+    if (status === 403) return apiMessage || 'Gmail blocked the send request.';
+  }
+  if (apiMessage) return apiMessage;
+  if (!status) return 'Request could not reach the mail provider.';
+  return `Mail provider rejected the request (${status}).`;
+}
+
+function formatSuccessStatus(result, trackingRecord = null) {
+  const successText = result?.provider === 'microsoft' ? 'Accepted ✓' : 'Sent ✓';
+  if (trackingRecord) {
+    return trackingRecord.state === 'error'
+      ? `${successText} · tracking registration failed`
+      : `${successText} · tracking pending`;
+  }
+  if (result?.provider === 'microsoft') return `${successText} · delivery pending`;
+  if (result?.messageId) return `${successText} · Gmail accepted`;
+  return successText;
+}
+
+function formatFailureStatus(result) {
+  const detail = sanitizeHeaderValue(result?.detail || '');
+  return detail ? `Failed ✗ · ${detail}` : 'Failed ✗';
+}
+
+function buildCompletionBanner(provider, successCount, failureCount) {
+  if (provider === 'microsoft') {
+    if (failureCount > 0) return `Campaign complete! ${successCount} accepted by Microsoft 365, ${failureCount} failed.`;
+    return `Campaign complete! ${successCount} accepted by Microsoft 365.`;
+  }
+  if (failureCount > 0) return `Campaign complete! ${successCount} sent, ${failureCount} failed.`;
+  return 'Campaign complete! All emails sent.';
+}
+
+function buildDeliveryNote(provider, pendingDeliveryCount) {
+  if (provider !== 'microsoft' || pendingDeliveryCount < 1) return '';
+  return 'Microsoft 365 returned 202 Accepted for these emails. That means Microsoft queued them, but delivery can still be blocked later by mailbox setup, tenant mail-flow rules, or anti-spam policies. If recipients still do not receive anything, first check whether the messages appear in Sent Items for the signed-in account.';
 }
 
 function shouldTrackOpens() {
@@ -1582,8 +1776,11 @@ function startOver() {
   document.getElementById('csvStatus').style.display = 'none';
   document.getElementById('emailLog').innerHTML = '';
   document.getElementById('doneBanner').style.display = 'none';
+  document.getElementById('deliveryNote').style.display = 'none';
+  document.getElementById('deliveryNote').textContent = '';
   document.getElementById('doneActions').style.display = 'none';
   document.getElementById('progFill').style.width = '0%';
+  document.getElementById('stSentLabel').textContent = 'Sent';
   renderTrackingPanel();
   updateStats();
   document.querySelectorAll('.card').forEach(c=>c.classList.remove('visible'));
@@ -1626,6 +1823,21 @@ function getMicrosoftAuthErrorMessage(err) {
   const msg = String(err?.message || err?.errorMessage || '').trim();
   if (msg) return `Microsoft sign-in failed: ${msg}`;
   return 'Microsoft sign-in failed. Check your redirect URI, account type, and API permissions.';
+}
+
+function getGoogleAuthErrorMessage(err) {
+  const error = String(err?.error || '').trim();
+  const desc = String(err?.error_description || err?.details || err?.message || '').trim();
+  const type = String(err?.type || '').trim();
+  const combined = `${error} ${desc} ${type}`.toLowerCase();
+
+  if (type === 'popup_closed') return 'Google sign-in popup was closed before finishing.';
+  if (combined.includes('access_denied') || combined.includes('access blocked') || combined.includes('verification')) {
+    return 'Google blocked this account because the OAuth app is still in testing or unverified. Add that Gmail address under Google Auth Platform -> Audience -> Test users, or use a verified production client ID.';
+  }
+  if (error) return `Google sign-in failed: ${error}.`;
+  if (desc) return `Google sign-in failed: ${desc}`;
+  return 'Google sign-in failed. Check your OAuth client, allowed origins, test users, and consent-screen status.';
 }
 
 async function ensureMsalLibrary() {
@@ -1805,8 +2017,35 @@ function generateMessageId() {
 }
 
 function sanitizeFilename(name) {
-  const cleaned = sanitizeHeaderValue(name).replace(/["\\]/g, '');
-  return cleaned || 'attachment.pdf';
+  const cleaned = sanitizeHeaderValue(name)
+    .replace(/["\\]/g, '')
+    .replace(/[^\x20-\x7E]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || 'attachment.bin';
+}
+
+function guessMimeTypeFromName(name) {
+  const ext = String(name || '').split('.').pop()?.toLowerCase() || '';
+  const known = {
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    json: 'application/json',
+    zip: 'application/zip',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  };
+  return known[ext] || 'application/octet-stream';
 }
 
 function buildFromHeaders() {

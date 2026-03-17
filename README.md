@@ -38,12 +38,22 @@ In Google Cloud Console OAuth client:
    - `https://sunny-0102.github.io/Reachout_Tool-main/`
    - `http://localhost:8001/index.html`
    - `http://localhost:8001`
-5. Copy the new Google OAuth Client ID into the app using `Manage Client IDs`.
+5. In `Google Auth Platform` (or `OAuth consent screen` in older UI), set the app audience correctly:
+   - If the app is `External` and still in `Testing`, add every Gmail address you want to sign in with under `Test users`.
+   - If you want anyone to use it, move the app to `Production` and complete any Google verification required for the Gmail scope.
+6. Copy the new Google OAuth Client ID into the app using `Manage Client IDs`.
 
 ### If you no longer have the old Google Cloud account
 - The app no longer hardcodes the old Google OAuth client ID.
 - Create a fresh OAuth client in your current Google account and paste that new client ID into the app.
 - If an old client ID was stored in your browser, the app now clears that legacy ID automatically.
+
+### If another Google account gets `Error 403: access_denied`
+- This usually means the OAuth app is in `Testing` and that Gmail address is not listed as a test user.
+- Open the Google Cloud project that owns your OAuth client ID.
+- Go to `Google Auth Platform` -> `Audience`.
+- Add the blocked Gmail address under `Test users`, then try again.
+- If you need public access beyond your own test accounts, switch the app to `Production` and complete Google's verification flow for the Gmail scope.
 
 ## Microsoft OAuth setup
 In Microsoft Entra App registrations:
