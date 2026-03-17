@@ -48,3 +48,31 @@ In Microsoft Entra App registrations:
 ## Notes
 - Microsoft sign-in does not work from `file://` URLs.
 - For local Microsoft testing, use `http://localhost/...` or an `https://` URL.
+- Open tracking is approximate because some mail clients block, proxy, or preload images.
+
+## Gmail Open Tracking
+This repo now includes optional Gmail open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
+
+### What it does
+- Adds an optional tracking pixel to Gmail sends.
+- Logs each tracked recipient to a tracker endpoint after send.
+- Shows `pending` vs `opened` status in the app's send screen.
+
+### Tracker endpoint file
+- `tracker/google-apps-script/Code.gs`
+
+### Google Apps Script setup
+1. Go to [script.new](https://script.new/) and create a new Apps Script project.
+2. Replace the default file contents with the code from `tracker/google-apps-script/Code.gs`.
+3. Change `TRACKER_STATUS_KEY` at the top of the script to a private value only you know.
+4. Deploy the script as a `Web app`.
+5. Set execute access to `Anyone`.
+6. Copy the deployed `Web app URL`.
+
+### MailBlast app setup
+1. Sign in with Google in the MailBlast app.
+2. In `Preview & Review`, enable `Open tracking`.
+3. Paste your Apps Script `Web app URL`.
+4. Paste the same `TRACKER_STATUS_KEY` value into `Tracking Status Key`.
+5. Send your Gmail campaign.
+6. Use `Refresh Opens` in the send screen to pull the latest open data.

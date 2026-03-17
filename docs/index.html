@@ -397,6 +397,26 @@
             Adds: "reply unsubscribe and I won't email again."
           </div>
         </div>
+        <div style="margin-top:16px;max-width:520px">
+          <label>Open Tracking <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(optional, Gmail only)</span></label>
+          <div class="check">
+            <input id="enableOpenTracking" type="checkbox" />
+            <label for="enableOpenTracking" style="margin:0;font-weight:600">Track opens with a tracking pixel</label>
+          </div>
+          <div id="trackingFields" style="display:none;margin-top:10px">
+            <div class="fld" style="margin-bottom:12px">
+              <label>Tracking Web App URL</label>
+              <input type="text" id="trackingEndpoint" placeholder="https://script.google.com/macros/s/your-app-id/exec" />
+            </div>
+            <div class="fld" style="margin-bottom:8px">
+              <label>Tracking Status Key</label>
+              <input type="text" id="trackingStatusKey" placeholder="Choose a private key used for status lookups" />
+            </div>
+            <div id="trackingHelp" style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">
+              Requires the Google Apps Script tracker endpoint. Open tracking is approximate because some mail clients block or preload images.
+            </div>
+          </div>
+        </div>
         <div class="btn-row">
           <button class="btn btn-ghost" onclick="nextStep(-1)">← Back</button>
           <button class="btn btn-danger" style="margin-left:auto" onclick="nextStep(3)">🚀 Send All Emails</button>
@@ -416,6 +436,31 @@
           <div class="stat-c"><div class="stat-n" id="stTotal">0</div><div class="stat-l">Total</div></div>
           <div class="stat-c"><div class="stat-n g" id="stSent">0</div><div class="stat-l">Sent</div></div>
           <div class="stat-c"><div class="stat-n r" id="stFailed">0</div><div class="stat-l">Failed</div></div>
+        </div>
+        <div id="trackingWrap" style="display:none;margin-top:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+            <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px">Open Tracking</div>
+            <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="refreshTrackingNow()">Refresh Opens</button>
+          </div>
+          <div class="stat-row" style="margin-top:0">
+            <div class="stat-c"><div class="stat-n" id="trackTracked">0</div><div class="stat-l">Tracked</div></div>
+            <div class="stat-c"><div class="stat-n g" id="trackOpened">0</div><div class="stat-l">Opened</div></div>
+            <div class="stat-c"><div class="stat-n" id="trackPending">0</div><div class="stat-l">Pending</div></div>
+          </div>
+          <div id="trackingMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">Tracking is off.</div>
+          <div class="rec-preview" style="margin-top:12px">
+            <table class="rec-table">
+              <thead>
+                <tr>
+                  <th>Recipient</th>
+                  <th>Status</th>
+                  <th>Last Opened</th>
+                  <th>Opens</th>
+                </tr>
+              </thead>
+              <tbody id="trackingTbody"></tbody>
+            </table>
+          </div>
         </div>
         <div style="margin-top:18px">
           <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">Send Log</div>
@@ -464,6 +509,8 @@ let attachedPdf = null; // { name, size, base64, mimeType }
 let sentCount = 0, failedCount = 0;
 let msalApp = null;
 let microsoftAccount = null;
+let trackingCampaign = null;
+let trackingPollTimer = null;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SEND_INTERVAL_MINUTES = 2;
 const MICROSOFT_SCOPES = ['User.Read', 'Mail.Send'];
@@ -473,6 +520,7 @@ const MICROSOFT_SCRIPT_URLS = [
   'https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js',
   'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
 ];
+const TRACKING_POLL_MS = 20000;
 
 // ==================== INIT ====================
 window.addEventListener('load', () => {
@@ -482,6 +530,9 @@ window.addEventListener('load', () => {
   document.getElementById('sendIntervalMinutes').value = savedInterval || String(DEFAULT_SEND_INTERVAL_MINUTES);
   const savedOptOut = localStorage.getItem('mb_include_opt_out');
   document.getElementById('includeOptOut').checked = savedOptOut === null ? true : savedOptOut === '1';
+  document.getElementById('enableOpenTracking').checked = localStorage.getItem('mb_tracking_enabled') === '1';
+  document.getElementById('trackingEndpoint').value = localStorage.getItem('mb_tracking_endpoint') || '';
+  document.getElementById('trackingStatusKey').value = localStorage.getItem('mb_tracking_status_key') || '';
   if (PRECONFIGURED_GOOGLE_CLIENT_ID) {
     googleClientId = PRECONFIGURED_GOOGLE_CLIENT_ID.trim();
     localStorage.setItem('mb_google_client_id', googleClientId);
@@ -497,6 +548,8 @@ window.addEventListener('load', () => {
   }
   showSetup();
   updateAuthButtons();
+  updateTrackingSettingsUi();
+  renderTrackingPanel();
 });
 
 function saveClientIds() {
@@ -716,16 +769,21 @@ async function signOut() {
       });
     } catch (e) {}
   }
+  stopTrackingPolling();
+  trackingCampaign = null;
+  renderTrackingPanel();
   resetAuthState();
   microsoftAccount = null;
   document.getElementById('userChip').style.display = 'none';
   document.getElementById('composerApp').style.display = 'none';
   document.getElementById('authScreen').style.display = 'flex';
+  updateTrackingSettingsUi();
 }
 
 function showComposer() {
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('composerApp').style.display = 'block';
+  updateTrackingSettingsUi();
 }
 
 // ==================== NAVIGATION ====================
@@ -746,6 +804,12 @@ function nextStep(from) {
     if (sendIntervalMinutes === null) return;
     localStorage.setItem('mb_send_interval_minutes', String(sendIntervalMinutes));
     localStorage.setItem('mb_include_opt_out', document.getElementById('includeOptOut').checked ? '1' : '0');
+
+    const trackingError = getTrackingValidationError();
+    if (trackingError) {
+      showToast(`⚠️ ${trackingError}`);
+      return;
+    }
 
     const tpl = document.getElementById('emailSubject').value + document.getElementById('emailBody').value;
     const hasMergeTags = /\{\{[a-zA-Z_]+\}\}/.test(tpl);
@@ -792,6 +856,12 @@ document.getElementById('includeOptOut').addEventListener('change', () => {
   localStorage.setItem('mb_include_opt_out', document.getElementById('includeOptOut').checked ? '1' : '0');
   if (currentStep === 3) updatePrev();
 });
+document.getElementById('enableOpenTracking').addEventListener('change', () => {
+  saveTrackingSettings();
+  updateTrackingSettingsUi();
+});
+document.getElementById('trackingEndpoint').addEventListener('input', saveTrackingSettings);
+document.getElementById('trackingStatusKey').addEventListener('input', saveTrackingSettings);
 function updateStats() {
   const body = document.getElementById('emailBody').value;
   const tags = [...new Set((( body + document.getElementById('emailSubject').value).match(/\{\{[a-zA-Z_]+\}\}/g)||[]))];
@@ -804,6 +874,57 @@ function insertTag(tag) {
   ta.value = ta.value.slice(0,s) + tag + ta.value.slice(ta.selectionEnd);
   ta.selectionStart = ta.selectionEnd = s + tag.length;
   ta.focus(); updateStats();
+}
+
+function saveTrackingSettings() {
+  const cfg = getTrackingConfig();
+  localStorage.setItem('mb_tracking_enabled', cfg.enabled ? '1' : '0');
+  localStorage.setItem('mb_tracking_endpoint', cfg.endpoint);
+  localStorage.setItem('mb_tracking_status_key', cfg.statusKey);
+  updateTrackingSettingsUi();
+}
+
+function getTrackingConfig() {
+  return {
+    enabled: !!document.getElementById('enableOpenTracking')?.checked,
+    endpoint: String(document.getElementById('trackingEndpoint')?.value || '').trim(),
+    statusKey: String(document.getElementById('trackingStatusKey')?.value || '').trim()
+  };
+}
+
+function updateTrackingSettingsUi() {
+  const cfg = getTrackingConfig();
+  const fields = document.getElementById('trackingFields');
+  const help = document.getElementById('trackingHelp');
+  if (fields) fields.style.display = cfg.enabled ? 'block' : 'none';
+  if (!help) return;
+
+  if (!cfg.enabled) {
+    help.textContent = 'Requires the Google Apps Script tracker endpoint. Open tracking is approximate because some mail clients block or preload images.';
+    return;
+  }
+
+  if (authProvider && authProvider !== 'google') {
+    help.textContent = 'Open tracking is enabled, but this version only appends tracking pixels for Gmail sends. Sign in with Google or turn tracking off.';
+    return;
+  }
+
+  help.textContent = 'Tracked Gmail emails include a tiny image that logs opens to your tracker endpoint. Some mail clients block, cache, or preload images, so opens are approximate.';
+}
+
+function getTrackingValidationError() {
+  const cfg = getTrackingConfig();
+  if (!cfg.enabled) return '';
+  if (authProvider !== 'google') return 'Open tracking currently works only for Gmail sends. Sign in with Google or turn tracking off.';
+  if (!cfg.endpoint) return 'Add your tracking web app URL or turn off open tracking.';
+  if (!cfg.statusKey) return 'Add a tracking status key so the app can refresh open data.';
+  try {
+    const url = new URL(cfg.endpoint);
+    if (url.protocol !== 'https:') return 'Tracking web app URL must start with https://.';
+  } catch (e) {
+    return 'Tracking web app URL is invalid.';
+  }
+  return '';
 }
 
 // ==================== PDF ====================
@@ -947,6 +1068,18 @@ async function startSending() {
   }
   const sendIntervalMs = Math.round(sendIntervalMinutes * 60 * 1000);
   localStorage.setItem('mb_send_interval_minutes', String(sendIntervalMinutes));
+  stopTrackingPolling();
+
+  const trackingError = getTrackingValidationError();
+  if (trackingError) {
+    showToast(`⚠️ ${trackingError}`);
+    navigateStep(3);
+    return;
+  }
+  trackingCampaign = shouldTrackOpens()
+    ? createTrackingCampaign(recipients, getTrackingConfig())
+    : null;
+  renderTrackingPanel();
 
   sentCount = 0; failedCount = 0;
   const total = recipients.length;
@@ -969,12 +1102,33 @@ async function startSending() {
     const rec = recipients[i];
     const subj = applyRaw(document.getElementById('emailSubject').value, rec);
     const body = applyOptOutFooter(applyRaw(document.getElementById('emailBody').value, rec));
+    const trackingRecord = trackingCampaign?.records[i] || null;
     setStatus(i, 'sending', 'Sending…');
     document.getElementById(`log-${i}`).scrollIntoView({ behavior:'smooth', block:'nearest' });
 
-    const ok = await sendEmail(rec.email, subj, body);
-    if (ok) { sentCount++; setStatus(i,'sent','Sent ✓'); }
-    else     { failedCount++; setStatus(i,'failed','Failed ✗'); }
+    const ok = await sendEmail(rec.email, subj, body, trackingRecord);
+    if (ok) {
+      sentCount++;
+      if (trackingRecord) {
+        trackingRecord.sentAt = new Date().toISOString();
+        trackingRecord.subject = subj;
+        trackingRecord.logIndex = i;
+        try {
+          await registerTrackingSend(trackingRecord);
+          trackingRecord.state = 'pending';
+          setStatus(i, 'sent', 'Sent ✓ · tracking pending');
+        } catch (e) {
+          trackingRecord.state = 'error';
+          setStatus(i, 'sent', 'Sent ✓ · tracking registration failed');
+        }
+      } else {
+        setStatus(i,'sent','Sent ✓');
+      }
+    } else {
+      failedCount++;
+      if (trackingRecord) trackingRecord.state = 'failed';
+      setStatus(i,'failed','Failed ✗');
+    }
 
     const done = i+1;
     document.getElementById('sendCount').textContent = `${done} / ${total}`;
@@ -983,7 +1137,14 @@ async function startSending() {
     document.getElementById('stFailed').textContent = failedCount;
 
     if (i < recipients.length - 1 && sendIntervalMs > 0) {
-      setStatus(i, ok ? 'sent' : 'failed', `${ok ? 'Sent ✓' : 'Failed ✗'} · waiting ${formatIntervalText(sendIntervalMinutes)}`);
+      const waitPrefix = ok
+        ? trackingRecord
+          ? trackingRecord.state === 'error'
+            ? 'Sent ✓ · tracking registration failed'
+            : 'Sent ✓ · tracking pending'
+          : 'Sent ✓'
+        : 'Failed ✗';
+      setStatus(i, ok ? 'sent' : 'failed', `${waitPrefix} · waiting ${formatIntervalText(sendIntervalMinutes)}`);
       await sleep(sendIntervalMs);
     }
   }
@@ -991,22 +1152,24 @@ async function startSending() {
   document.getElementById('sendTitle').textContent = 'Campaign Complete!';
   document.getElementById('doneBanner').style.display = 'flex';
   document.getElementById('doneActions').style.display = 'flex';
+  renderTrackingPanel();
+  if (trackingCampaign) startTrackingPolling();
 }
 
-async function sendEmail(to, subject, body) {
+async function sendEmail(to, subject, body, trackingRecord = null) {
   if (authProvider === 'microsoft') {
     return sendViaMicrosoft(to, subject, body);
   }
-  return sendViaGmail(to, subject, body);
+  return sendViaGmail(to, subject, body, trackingRecord);
 }
 
-async function sendViaGmail(to, subject, body) {
+async function sendViaGmail(to, subject, body, trackingRecord = null) {
   try {
     let raw;
     if (attachedPdf) {
-      raw = buildMimeWithAttachment(to, subject, body, attachedPdf);
+      raw = buildMimeWithAttachment(to, subject, body, attachedPdf, trackingRecord);
     } else {
-      raw = buildMimePlain(to, subject, body);
+      raw = buildMimePlain(to, subject, body, trackingRecord);
     }
     const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
       method: 'POST',
@@ -1072,11 +1235,11 @@ async function sendViaMicrosoft(to, subject, body) {
   }
 }
 
-function buildMimePlain(to, subject, body) {
+function buildMimePlain(to, subject, body, trackingRecord = null) {
   const safeTo = sanitizeHeaderValue(to);
   const safeSubject = encodeHeaderValue(subject);
   const bodyB64 = foldBase64(utf8ToBase64(body || ''));
-  const htmlB64 = foldBase64(utf8ToBase64(textToHtml(body || '')));
+  const htmlB64 = foldBase64(utf8ToBase64(textToHtml(body || '', buildTrackingPixelHtml(trackingRecord))));
   const altBoundary = 'mb_alt_' + Math.random().toString(36).slice(2);
   const msg = [
     `To: ${safeTo}`,
@@ -1104,12 +1267,12 @@ function buildMimePlain(to, subject, body) {
   return toBase64Url(msg);
 }
 
-function buildMimeWithAttachment(to, subject, body, pdf) {
+function buildMimeWithAttachment(to, subject, body, pdf, trackingRecord = null) {
   const safeTo = sanitizeHeaderValue(to);
   const safeSubject = encodeHeaderValue(subject);
   const safeFilename = sanitizeFilename(pdf.name || 'attachment.pdf');
   const bodyB64 = foldBase64(utf8ToBase64(body || ''));
-  const htmlB64 = foldBase64(utf8ToBase64(textToHtml(body || '')));
+  const htmlB64 = foldBase64(utf8ToBase64(textToHtml(body || '', buildTrackingPixelHtml(trackingRecord))));
   const attB64 = foldBase64((pdf.base64 || '').replace(/\s+/g, ''));
   const mixedBoundary = 'mb_mixed_' + Math.random().toString(36).slice(2);
   const altBoundary = 'mb_alt_' + Math.random().toString(36).slice(2);
@@ -1164,12 +1327,214 @@ function setStatus(i, status, msg) {
   else dot.innerHTML = '';
 }
 
+function shouldTrackOpens() {
+  return getTrackingConfig().enabled && authProvider === 'google';
+}
+
+function createTrackingCampaign(recipientList, cfg) {
+  const campaignId = `cmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id: campaignId,
+    endpoint: cfg.endpoint,
+    statusKey: cfg.statusKey,
+    createdAt: new Date().toISOString(),
+    records: recipientList.map((rec, index) => ({
+      id: `${campaignId}_${index}_${Math.random().toString(36).slice(2, 8)}`,
+      email: rec.email,
+      name: rec.name || '',
+      logIndex: index,
+      sentAt: '',
+      state: 'queued',
+      openCount: 0,
+      openedAt: ''
+    })),
+    lastSyncedAt: ''
+  };
+}
+
+function buildTrackingPixelHtml(trackingRecord) {
+  if (!trackingRecord || !trackingCampaign?.endpoint) return '';
+  const pixelUrl = buildTrackerUrl(trackingCampaign.endpoint, {
+    action: 'open',
+    campaign: trackingCampaign.id,
+    id: trackingRecord.id
+  });
+  const safeSrc = escapeHtml(pixelUrl);
+  return `<img src="${safeSrc}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;opacity:0" referrerpolicy="no-referrer" />`;
+}
+
+async function registerTrackingSend(trackingRecord) {
+  if (!trackingCampaign) return;
+  const payload = await requestTrackingJsonp(trackingCampaign.endpoint, {
+    action: 'register',
+    key: trackingCampaign.statusKey,
+    campaign: trackingCampaign.id,
+    id: trackingRecord.id,
+    email: trackingRecord.email,
+    name: trackingRecord.name,
+    sentAt: trackingRecord.sentAt || new Date().toISOString()
+  });
+  if (!payload?.ok) throw new Error(payload?.error || 'Tracking registration failed.');
+}
+
+async function refreshTrackingNow(silent = false) {
+  if (!trackingCampaign) {
+    if (!silent) showToast('⚠️ No tracked Gmail campaign is active yet.');
+    return;
+  }
+  try {
+    const payload = await requestTrackingJsonp(trackingCampaign.endpoint, {
+      action: 'status',
+      key: trackingCampaign.statusKey,
+      campaign: trackingCampaign.id
+    });
+    if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
+    mergeTrackingStatus(Array.isArray(payload.records) ? payload.records : []);
+    trackingCampaign.lastSyncedAt = new Date().toISOString();
+    renderTrackingPanel();
+    syncTrackingLogMessages();
+    if (!silent) showToast('Tracking refreshed.');
+  } catch (e) {
+    if (!silent) showToast('⚠️ Could not refresh open tracking right now.');
+  }
+}
+
+function mergeTrackingStatus(records) {
+  const byId = new Map(records.map(record => [String(record.id || ''), record]));
+  trackingCampaign.records.forEach(record => {
+    const hit = byId.get(record.id);
+    if (!hit) return;
+    const openCount = Number(hit.openCount || hit.opens || 0);
+    const openedAt = String(hit.openedAt || hit.lastOpenedAt || '').trim();
+    if (openCount > 0 || openedAt) {
+      record.state = 'opened';
+      record.openCount = openCount || 1;
+      record.openedAt = openedAt || record.openedAt;
+    } else if (record.state !== 'error' && record.state !== 'failed') {
+      record.state = 'pending';
+    }
+  });
+}
+
+function renderTrackingPanel() {
+  const wrap = document.getElementById('trackingWrap');
+  const tbody = document.getElementById('trackingTbody');
+  const meta = document.getElementById('trackingMeta');
+  if (!wrap || !tbody || !meta) return;
+
+  if (!trackingCampaign) {
+    wrap.style.display = 'none';
+    tbody.innerHTML = '';
+    meta.textContent = 'Tracking is off.';
+    return;
+  }
+
+  wrap.style.display = 'block';
+  const tracked = trackingCampaign.records.filter(record => record.state !== 'failed').length;
+  const opened = trackingCampaign.records.filter(record => record.state === 'opened').length;
+  const pending = Math.max(tracked - opened - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
+
+  document.getElementById('trackTracked').textContent = tracked;
+  document.getElementById('trackOpened').textContent = opened;
+  document.getElementById('trackPending').textContent = pending;
+  meta.textContent = trackingCampaign.lastSyncedAt
+    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)}`
+    : `Campaign ${trackingCampaign.id} · waiting for the first refresh`;
+
+  tbody.innerHTML = trackingCampaign.records.map(record => {
+    const label = record.name
+      ? `${escapeHtml(record.email)} · <span class="log-name-txt">${escapeHtml(record.name)}</span>`
+      : escapeHtml(record.email);
+    const status = record.state === 'opened'
+      ? 'Opened'
+      : record.state === 'error'
+        ? 'Tracking error'
+        : record.state === 'failed'
+          ? 'Not sent'
+          : 'Pending';
+    const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
+    const openCount = record.state === 'opened' ? String(record.openCount || 1) : '—';
+    return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
+  }).join('');
+}
+
+function syncTrackingLogMessages() {
+  if (!trackingCampaign) return;
+  trackingCampaign.records.forEach(record => {
+    if (record.logIndex == null) return;
+    if (record.state === 'opened') {
+      const suffix = record.openCount > 1 ? ` · ${record.openCount} opens` : '';
+      setStatus(record.logIndex, 'sent', `Sent ✓ · opened ${formatDateTime(record.openedAt)}${suffix}`);
+    } else if (record.state === 'pending') {
+      setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking pending');
+    } else if (record.state === 'error') {
+      setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking registration failed');
+    }
+  });
+}
+
+function startTrackingPolling() {
+  if (!trackingCampaign) return;
+  stopTrackingPolling();
+  refreshTrackingNow(true);
+  trackingPollTimer = setInterval(() => {
+    refreshTrackingNow(true);
+  }, TRACKING_POLL_MS);
+}
+
+function stopTrackingPolling() {
+  if (!trackingPollTimer) return;
+  clearInterval(trackingPollTimer);
+  trackingPollTimer = null;
+}
+
+function requestTrackingJsonp(endpoint, params) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `mbTrackCb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const url = buildTrackerUrl(endpoint, { ...params, callback: callbackName });
+    const script = document.createElement('script');
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Tracker request timed out.'));
+    }, 10000);
+
+    window[callbackName] = (payload) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(payload || {});
+    };
+
+    script.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('Tracker request failed.'));
+    };
+    script.src = url;
+    document.head.appendChild(script);
+  });
+}
+
+function buildTrackerUrl(endpoint, params) {
+  const url = new URL(endpoint);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    url.searchParams.set(key, String(value));
+  });
+  return url.toString();
+}
+
 // ==================== MODAL ====================
 function closeModal() { document.getElementById('confirmModal').classList.remove('show'); }
 function confirmSend() { closeModal(); navigateStep(4); startSending(); }
 
 // ==================== UTILS ====================
 function startOver() {
+  stopTrackingPolling();
+  trackingCampaign = null;
   recipients = []; attachedPdf = null; sentCount = 0; failedCount = 0;
   ['emailSubject','emailBody','pasteEmails'].forEach(id => document.getElementById(id).value='');
   document.getElementById('recTableWrap').style.display = 'none';
@@ -1180,6 +1545,7 @@ function startOver() {
   document.getElementById('doneBanner').style.display = 'none';
   document.getElementById('doneActions').style.display = 'none';
   document.getElementById('progFill').style.width = '0%';
+  renderTrackingPanel();
   updateStats();
   document.querySelectorAll('.card').forEach(c=>c.classList.remove('visible'));
   document.getElementById('step1').classList.add('visible');
@@ -1419,17 +1785,34 @@ function buildFromHeaders() {
   return headers;
 }
 
-function textToHtml(text) {
-  const escaped = String(text || '')
+function escapeHtml(text) {
+  return String(text || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function textToHtml(text, extraHtml = '') {
+  const escaped = escapeHtml(text);
   const paragraphs = escaped
     .split(/\n\n+/)
     .map(p => `<p style="margin:0 0 14px 0;line-height:1.6">${p.replace(/\n/g, '<br>')}</p>`)
     .join('\n');
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;margin:0;padding:0">${paragraphs}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;margin:0;padding:0">${paragraphs}${extraHtml || ''}</body></html>`;
+}
+
+function formatDateTime(isoString) {
+  if (!isoString) return '—';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
 }
 
 // CSV drag-drop
