@@ -633,8 +633,12 @@ function startGoogleAuth() {
       authProvider = 'google';
       fetchGoogleUserInfo();
     },
+    error_callback: (err) => {
+      const kind = err?.type ? ` (${err.type})` : '';
+      showToast(`❌ Google sign-in failed${kind}.`);
+    },
   });
-  client.requestAccessToken();
+  client.requestAccessToken({ prompt: 'select_account consent' });
 }
 
 async function fetchGoogleUserInfo() {
@@ -761,6 +765,9 @@ function resetAuthState() {
 }
 
 async function signOut() {
+  if (authProvider === 'google') {
+    await revokeGoogleAccess();
+  }
   if (authProvider === 'microsoft' && msalApp && microsoftAccount) {
     try {
       await msalApp.logoutPopup({
@@ -784,6 +791,18 @@ function showComposer() {
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('composerApp').style.display = 'block';
   updateTrackingSettingsUi();
+}
+
+async function revokeGoogleAccess() {
+  const token = accessToken;
+  if (!token || !window.google?.accounts?.oauth2?.revoke) return;
+  await new Promise((resolve) => {
+    try {
+      window.google.accounts.oauth2.revoke(token, () => resolve());
+    } catch (e) {
+      resolve();
+    }
+  });
 }
 
 // ==================== NAVIGATION ====================
