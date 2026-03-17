@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>MailBlast — Bulk Email Sender</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js" async defer></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js" defer></script>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet" />
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -468,11 +468,16 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SEND_INTERVAL_MINUTES = 2;
 const MICROSOFT_SCOPES = ['User.Read', 'Mail.Send'];
 const MICROSOFT_AUTHORITY = 'https://login.microsoftonline.com/common';
+const MICROSOFT_LOCALHOST_HINT = 'http://localhost:PORT/index.html';
+const MICROSOFT_SCRIPT_URLS = [
+  'https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js',
+  'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
+];
 
 // ==================== INIT ====================
 window.addEventListener('load', () => {
-  document.getElementById('currentOrigin').textContent = location.origin;
-  document.getElementById('currentRedirectUri').textContent = getMicrosoftRedirectUri();
+  document.getElementById('currentOrigin').textContent = getCurrentOriginDisplay();
+  document.getElementById('currentRedirectUri').textContent = getMicrosoftRedirectUriDisplay();
   const savedInterval = localStorage.getItem('mb_send_interval_minutes');
   document.getElementById('sendIntervalMinutes').value = savedInterval || String(DEFAULT_SEND_INTERVAL_MINUTES);
   const savedOptOut = localStorage.getItem('mb_include_opt_out');
@@ -543,13 +548,19 @@ function updateAuthButtons() {
   const microsoftBtn = document.getElementById('microsoftAuthBtn');
   const hint = document.getElementById('authHint');
   if (!googleBtn || !microsoftBtn || !hint) return;
+  const microsoftSupported = isMicrosoftWebAuthSupported();
 
   googleBtn.disabled = !googleClientId;
-  microsoftBtn.disabled = !microsoftClientId;
+  microsoftBtn.disabled = !microsoftClientId || !microsoftSupported;
 
   const ready = [];
   if (googleClientId) ready.push('Gmail ready');
-  if (microsoftClientId) ready.push('Microsoft 365 ready');
+  if (microsoftClientId) ready.push(microsoftSupported ? 'Microsoft 365 ready' : 'Microsoft 365 needs localhost/https');
+
+  if (microsoftClientId && !microsoftSupported) {
+    hint.textContent = `Serve this page from http://localhost or https://, then add that exact URL in Microsoft Entra. Example: ${MICROSOFT_LOCALHOST_HINT}`;
+    return;
+  }
   hint.textContent = ready.length ? ready.join(' · ') : 'Add a client ID in setup before signing in.';
 }
 
@@ -593,6 +604,10 @@ async function startMicrosoftAuth() {
     showSetup();
     return;
   }
+  if (!isMicrosoftWebAuthSupported()) {
+    showToast('⚠️ Microsoft sign-in needs this page on http://localhost or https://, not file://.');
+    return;
+  }
   try {
     const app = await getMsalApp();
     const loginResp = await app.loginPopup({
@@ -606,12 +621,13 @@ async function startMicrosoftAuth() {
     await fetchMicrosoftUserInfo();
     showComposer();
   } catch (e) {
-    showToast('❌ Microsoft sign-in failed.');
+    showToast('❌ ' + getMicrosoftAuthErrorMessage(e));
   }
 }
 
 async function getMsalApp() {
   if (msalApp) return msalApp;
+  await ensureMsalLibrary();
   if (!window.msal?.PublicClientApplication) throw new Error('MSAL library not loaded');
   msalApp = new window.msal.PublicClientApplication({
     auth: {
@@ -1180,8 +1196,78 @@ function getProviderLabel() {
   return authProvider === 'microsoft' ? 'Outlook / Microsoft 365' : 'Gmail';
 }
 
+function isMicrosoftWebAuthSupported() {
+  return location.protocol === 'http:' || location.protocol === 'https:';
+}
+
+function getCurrentOriginDisplay() {
+  return location.origin === 'null' ? 'file:// (Google works, Microsoft SPA auth does not)' : location.origin;
+}
+
+function getMicrosoftRedirectUriDisplay() {
+  return isMicrosoftWebAuthSupported()
+    ? getMicrosoftRedirectUri()
+    : `Serve this page from localhost or https first, then use that exact URL here. Example: ${MICROSOFT_LOCALHOST_HINT}`;
+}
+
 function getMicrosoftRedirectUri() {
-  return location.origin === 'null' ? location.href : `${location.origin}${location.pathname}`;
+  if (!isMicrosoftWebAuthSupported()) {
+    throw new Error('Microsoft sign-in requires this page to be served over http://localhost or https://.');
+  }
+  return `${location.origin}${location.pathname}`;
+}
+
+function getMicrosoftAuthErrorMessage(err) {
+  const msg = String(err?.message || err?.errorMessage || '').trim();
+  if (msg) return `Microsoft sign-in failed: ${msg}`;
+  return 'Microsoft sign-in failed. Check your redirect URI, account type, and API permissions.';
+}
+
+async function ensureMsalLibrary() {
+  if (window.msal?.PublicClientApplication) return;
+  for (const url of MICROSOFT_SCRIPT_URLS) {
+    try {
+      await loadExternalScript(url);
+      if (window.msal?.PublicClientApplication) return;
+    } catch (e) {}
+  }
+  throw new Error('MSAL library not loaded. Check your internet connection or content blockers, then reload the page.');
+}
+
+function loadExternalScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = Array.from(document.scripts).find((script) => script.src === src);
+    if (existing) {
+      if (existing.dataset.loaded === '1' || window.msal?.PublicClientApplication) {
+        resolve();
+        return;
+      }
+      existing.addEventListener('load', () => {
+        existing.dataset.loaded = '1';
+        resolve();
+      }, { once: true });
+      existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
+      setTimeout(() => {
+        if (window.msal?.PublicClientApplication) resolve();
+        else reject(new Error(`Timed out loading ${src}`));
+      }, 4000);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = src;
+    script.defer = true;
+    script.onload = () => {
+      script.dataset.loaded = '1';
+      resolve();
+    };
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(script);
+    setTimeout(() => {
+      if (window.msal?.PublicClientApplication) resolve();
+      else reject(new Error(`Timed out loading ${src}`));
+    }, 4000);
+  });
 }
 
 function getSendIntervalMinutes() {
