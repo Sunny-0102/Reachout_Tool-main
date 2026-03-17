@@ -325,6 +325,35 @@
           <div style="font-size:12px;color:var(--text3)"><span id="charCount">0</span> chars · <span id="tagCount">0</span> merge tags</div>
           <button class="btn btn-primary" style="margin-left:auto" onclick="nextStep(1)">Next: Add Recipients →</button>
         </div>
+        <div id="trackingHistorySection" style="display:none;margin-top:18px;padding:18px;border:1px solid rgba(255,255,255,0.08);border-radius:18px;background:rgba(255,255,255,0.03)">
+          <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px">Campaign History</div>
+          <div style="margin-top:6px;font-size:13px;color:var(--text2);line-height:1.6">This browser keeps your sent tracking campaigns so you can reopen and refresh them even after pressing Start Over.</div>
+          <div class="btn-row" style="margin-top:14px;align-items:center">
+            <select id="trackingHistorySelect" onchange="handleTrackingHistorySelection()" style="flex:1;min-width:240px"></select>
+            <button class="btn btn-ghost" style="padding:8px 14px" onclick="refreshSelectedTrackingHistory()">Refresh Selected</button>
+            <button class="btn btn-ghost" style="padding:8px 14px" onclick="clearTrackingHistory()">Clear History</button>
+          </div>
+          <div class="stat-row" style="margin-top:14px">
+            <div class="stat-c"><div class="stat-n" id="histTracked">0</div><div class="stat-l">Tracked</div></div>
+            <div class="stat-c"><div class="stat-n g" id="histOpened">0</div><div class="stat-l">Opened</div></div>
+            <div class="stat-c"><div class="stat-n" id="histPrefetched">0</div><div class="stat-l">Auto-fetch</div></div>
+            <div class="stat-c"><div class="stat-n" id="histPending">0</div><div class="stat-l">Pending</div></div>
+          </div>
+          <div id="trackingHistoryMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;"></div>
+          <div class="rec-preview" style="margin-top:12px">
+            <table class="rec-table">
+              <thead>
+                <tr>
+                  <th>Recipient</th>
+                  <th>Status</th>
+                  <th>Last Opened</th>
+                  <th>Opens</th>
+                </tr>
+              </thead>
+              <tbody id="trackingHistoryTbody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- Step 2: Recipients -->
@@ -526,6 +555,7 @@ let sentCount = 0, failedCount = 0;
 let msalApp = null;
 let microsoftAccount = null;
 let trackingCampaign = null;
+let trackingCampaignHistory = [];
 let trackingPollTimer = null;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SEND_INTERVAL_MINUTES = 2;
@@ -539,6 +569,9 @@ const MICROSOFT_SCRIPT_URLS = [
 ];
 const TRACKING_POLL_MS = 20000;
 const TRACKING_PREFETCH_WINDOW_MS = 2 * 60 * 1000;
+const TRACKING_HISTORY_STORAGE_KEY = 'mb_tracking_campaign_history_v1';
+const TRACKING_HISTORY_SELECTION_KEY = 'mb_tracking_selected_campaign_id';
+const TRACKING_HISTORY_LIMIT = 25;
 
 // ==================== INIT ====================
 window.addEventListener('load', () => {
@@ -580,6 +613,8 @@ window.addEventListener('load', () => {
   if (PRECONFIGURED_TRACKING_STATUS_KEY) {
     localStorage.setItem('mb_tracking_status_key', PRECONFIGURED_TRACKING_STATUS_KEY.trim());
   }
+  trackingCampaignHistory = loadTrackingCampaignHistory();
+  renderTrackingHistorySection();
   if (googleClientId || microsoftClientId) {
     showMainApp();
     return;
@@ -619,6 +654,7 @@ function showMainApp() {
   document.getElementById('setupScreen').style.display = 'none';
   document.getElementById('mainApp').style.display = 'block';
   updateAuthButtons();
+  renderTrackingHistorySection();
   if (accessToken) {
     showComposer();
   } else {
@@ -960,6 +996,175 @@ function saveTrackingSettings() {
   updateTrackingSettingsUi();
 }
 
+function loadTrackingCampaignHistory() {
+  try {
+    const raw = localStorage.getItem(TRACKING_HISTORY_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(campaign => campaign && typeof campaign.id === 'string' && Array.isArray(campaign.records))
+      .slice(0, TRACKING_HISTORY_LIMIT);
+  } catch (e) {
+    return [];
+  }
+}
+
+function persistTrackingCampaignHistory() {
+  localStorage.setItem(
+    TRACKING_HISTORY_STORAGE_KEY,
+    JSON.stringify(trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT))
+  );
+}
+
+function cloneTrackingCampaign(campaign) {
+  return JSON.parse(JSON.stringify(campaign));
+}
+
+function getTrackingHistorySelectionId() {
+  const stored = localStorage.getItem(TRACKING_HISTORY_SELECTION_KEY) || '';
+  if (stored && trackingCampaignHistory.some(campaign => campaign.id === stored)) return stored;
+  return trackingCampaignHistory[0]?.id || '';
+}
+
+function setTrackingHistorySelectionId(campaignId) {
+  if (campaignId) localStorage.setItem(TRACKING_HISTORY_SELECTION_KEY, campaignId);
+  else localStorage.removeItem(TRACKING_HISTORY_SELECTION_KEY);
+}
+
+function getTrackingHistoryCampaignById(campaignId) {
+  return trackingCampaignHistory.find(campaign => campaign.id === campaignId) || null;
+}
+
+function upsertTrackingCampaignHistory(campaign) {
+  if (!campaign?.id) return;
+  const snapshot = cloneTrackingCampaign(campaign);
+  trackingCampaignHistory = trackingCampaignHistory.filter(existing => existing.id !== snapshot.id);
+  trackingCampaignHistory.unshift(snapshot);
+  trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  trackingCampaignHistory = trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT);
+  setTrackingHistorySelectionId(snapshot.id);
+  persistTrackingCampaignHistory();
+  renderTrackingHistorySection();
+}
+
+function saveActiveTrackingCampaign() {
+  if (!trackingCampaign?.id) return;
+  upsertTrackingCampaignHistory(trackingCampaign);
+}
+
+function buildTrackingCampaignLabel(campaign) {
+  const createdAt = campaign?.createdAt ? formatDateTime(campaign.createdAt) : 'Unknown time';
+  const sender = campaign?.senderEmail || 'Unknown sender';
+  const count = Array.isArray(campaign?.records) ? campaign.records.length : 0;
+  return `${createdAt} · ${sender} · ${count} recipient${count === 1 ? '' : 's'}`;
+}
+
+function getTrackingCampaignCounts(campaign) {
+  const records = Array.isArray(campaign?.records) ? campaign.records : [];
+  const tracked = records.filter(record => record.state !== 'failed').length;
+  const opened = records.filter(record => record.state === 'opened').length;
+  const prefetched = records.filter(record => record.state === 'prefetched').length;
+  const pending = Math.max(tracked - opened - prefetched - records.filter(record => record.state === 'error').length, 0);
+  return { tracked, opened, prefetched, pending };
+}
+
+function buildTrackingCampaignRowsHtml(campaign) {
+  return (campaign?.records || []).map(record => {
+    const label = record.name
+      ? `${escapeHtml(record.email)} · <span class="log-name-txt">${escapeHtml(record.name)}</span>`
+      : escapeHtml(record.email);
+    const status = record.state === 'opened'
+      ? 'Opened'
+      : record.state === 'prefetched'
+        ? 'Likely auto-fetch'
+      : record.state === 'error'
+        ? 'Tracking error'
+      : record.state === 'failed'
+        ? 'Not sent'
+        : 'Pending';
+    const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
+    const openCount = record.state === 'opened' || record.state === 'prefetched' ? String(record.openCount || 1) : '—';
+    return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
+  }).join('');
+}
+
+function renderTrackingHistorySection() {
+  const wrap = document.getElementById('trackingHistorySection');
+  const select = document.getElementById('trackingHistorySelect');
+  const meta = document.getElementById('trackingHistoryMeta');
+  const tbody = document.getElementById('trackingHistoryTbody');
+  if (!wrap || !select || !meta || !tbody) return;
+
+  if (!trackingCampaignHistory.length) {
+    wrap.style.display = 'none';
+    tbody.innerHTML = '';
+    meta.textContent = '';
+    return;
+  }
+
+  wrap.style.display = 'block';
+  const selectedId = getTrackingHistorySelectionId();
+  select.innerHTML = trackingCampaignHistory.map(campaign => {
+    const selected = campaign.id === selectedId ? ' selected' : '';
+    return `<option value="${escapeHtml(campaign.id)}"${selected}>${escapeHtml(buildTrackingCampaignLabel(campaign))}</option>`;
+  }).join('');
+
+  const campaign = getTrackingHistoryCampaignById(select.value || selectedId) || trackingCampaignHistory[0];
+  if (!campaign) return;
+
+  const counts = getTrackingCampaignCounts(campaign);
+  document.getElementById('histTracked').textContent = counts.tracked;
+  document.getElementById('histOpened').textContent = counts.opened;
+  document.getElementById('histPrefetched').textContent = counts.prefetched;
+  document.getElementById('histPending').textContent = counts.pending;
+  meta.textContent = campaign.lastSyncedAt
+    ? `Campaign ${campaign.id} · sender ${campaign.senderEmail || 'unknown'} · last checked ${formatDateTime(campaign.lastSyncedAt)}`
+    : `Campaign ${campaign.id} · sender ${campaign.senderEmail || 'unknown'} · waiting for the first refresh`;
+  tbody.innerHTML = buildTrackingCampaignRowsHtml(campaign);
+}
+
+function handleTrackingHistorySelection() {
+  const select = document.getElementById('trackingHistorySelect');
+  setTrackingHistorySelectionId(select?.value || '');
+  renderTrackingHistorySection();
+}
+
+async function refreshSelectedTrackingHistory() {
+  const campaignId = document.getElementById('trackingHistorySelect')?.value || getTrackingHistorySelectionId();
+  const campaign = getTrackingHistoryCampaignById(campaignId);
+  if (!campaign) {
+    showToast('⚠️ No saved tracking campaign found in this browser yet.');
+    return;
+  }
+  try {
+    const payload = await requestTrackingJsonp(campaign.endpoint, {
+      action: 'status',
+      key: campaign.statusKey,
+      campaign: campaign.id
+    });
+    if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
+    mergeTrackingStatusIntoCampaign(campaign, Array.isArray(payload.records) ? payload.records : []);
+    campaign.lastSyncedAt = new Date().toISOString();
+    upsertTrackingCampaignHistory(campaign);
+    if (trackingCampaign?.id === campaign.id) {
+      trackingCampaign = cloneTrackingCampaign(campaign);
+      renderTrackingPanel();
+      syncTrackingLogMessages();
+    }
+    showToast('Saved campaign refreshed.');
+  } catch (e) {
+    showToast(`⚠️ ${getTrackingRequestErrorMessage(e)}`);
+  }
+}
+
+function clearTrackingHistory() {
+  trackingCampaignHistory = [];
+  localStorage.removeItem(TRACKING_HISTORY_STORAGE_KEY);
+  localStorage.removeItem(TRACKING_HISTORY_SELECTION_KEY);
+  renderTrackingHistorySection();
+  showToast('Saved tracking history cleared from this browser.');
+}
+
 function getTrackingConfig() {
   return {
     enabled: !!document.getElementById('enableOpenTracking')?.checked,
@@ -1166,6 +1371,7 @@ async function startSending() {
   trackingCampaign = shouldTrackOpens()
     ? createTrackingCampaign(recipients, getTrackingConfig())
     : null;
+  if (trackingCampaign) saveActiveTrackingCampaign();
   renderTrackingPanel();
 
   sentCount = 0; failedCount = 0;
@@ -1210,9 +1416,11 @@ async function startSending() {
         try {
           await registerTrackingSend(trackingRecord);
           trackingRecord.state = 'pending';
+          saveActiveTrackingCampaign();
           setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
         } catch (e) {
           trackingRecord.state = 'error';
+          saveActiveTrackingCampaign();
           setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
         }
       } else {
@@ -1220,7 +1428,10 @@ async function startSending() {
       }
     } else {
       failedCount++;
-      if (trackingRecord) trackingRecord.state = 'failed';
+      if (trackingRecord) {
+        trackingRecord.state = 'failed';
+        saveActiveTrackingCampaign();
+      }
       setStatus(i, 'failed', formatFailureStatus(result));
     }
 
@@ -1246,6 +1457,7 @@ async function startSending() {
   deliveryNote.textContent = deliveryText;
   deliveryNote.style.display = deliveryText ? 'block' : 'none';
   document.getElementById('doneActions').style.display = 'flex';
+  saveActiveTrackingCampaign();
   renderTrackingPanel();
   if (trackingCampaign) startTrackingPolling();
 }
@@ -1575,6 +1787,9 @@ function createTrackingCampaign(recipientList, cfg) {
     endpoint: cfg.endpoint,
     statusKey: cfg.statusKey,
     createdAt: new Date().toISOString(),
+    senderEmail: senderEmail || '',
+    senderName: senderName || '',
+    provider: authProvider || '',
     records: recipientList.map((rec, index) => ({
       id: `${campaignId}_${index}_${Math.random().toString(36).slice(2, 8)}`,
       email: rec.email,
@@ -1630,7 +1845,9 @@ async function refreshTrackingNow(silent = false) {
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
     mergeTrackingStatus(Array.isArray(payload.records) ? payload.records : []);
     trackingCampaign.lastSyncedAt = new Date().toISOString();
+    saveActiveTrackingCampaign();
     renderTrackingPanel();
+    renderTrackingHistorySection();
     syncTrackingLogMessages();
     if (!silent) showToast('Tracking refreshed.');
   } catch (e) {
@@ -1639,8 +1856,13 @@ async function refreshTrackingNow(silent = false) {
 }
 
 function mergeTrackingStatus(records) {
+  if (!trackingCampaign) return;
+  mergeTrackingStatusIntoCampaign(trackingCampaign, records);
+}
+
+function mergeTrackingStatusIntoCampaign(campaign, records) {
   const byId = new Map(records.map(record => [String(record.id || ''), record]));
-  trackingCampaign.records.forEach(record => {
+  campaign.records.forEach(record => {
     const hit = byId.get(record.id);
     if (!hit) return;
     const openCount = Number(hit.openCount || hit.opens || 0);
@@ -1693,23 +1915,7 @@ function renderTrackingPanel() {
     ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)} · Outlook/Microsoft 365 auto-fetches may be shown separately`
     : `Campaign ${trackingCampaign.id} · waiting for the first refresh`;
 
-  tbody.innerHTML = trackingCampaign.records.map(record => {
-    const label = record.name
-      ? `${escapeHtml(record.email)} · <span class="log-name-txt">${escapeHtml(record.name)}</span>`
-      : escapeHtml(record.email);
-    const status = record.state === 'opened'
-      ? 'Opened'
-      : record.state === 'prefetched'
-        ? 'Likely auto-fetch'
-      : record.state === 'error'
-        ? 'Tracking error'
-        : record.state === 'failed'
-          ? 'Not sent'
-          : 'Pending';
-    const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
-    const openCount = record.state === 'opened' || record.state === 'prefetched' ? String(record.openCount || 1) : '—';
-    return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
-  }).join('');
+  tbody.innerHTML = buildTrackingCampaignRowsHtml(trackingCampaign);
 }
 
 function syncTrackingLogMessages() {
@@ -1801,6 +2007,7 @@ function confirmSend() { closeModal(); navigateStep(4); startSending(); }
 // ==================== UTILS ====================
 function startOver() {
   stopTrackingPolling();
+  saveActiveTrackingCampaign();
   trackingCampaign = null;
   recipients = []; attachedPdf = null; sentCount = 0; failedCount = 0;
   ['emailSubject','emailBody','pasteEmails'].forEach(id => document.getElementById(id).value='');
@@ -1816,6 +2023,7 @@ function startOver() {
   document.getElementById('progFill').style.width = '0%';
   document.getElementById('stSentLabel').textContent = 'Sent';
   renderTrackingPanel();
+  renderTrackingHistorySection();
   updateStats();
   document.querySelectorAll('.card').forEach(c=>c.classList.remove('visible'));
   document.getElementById('step1').classList.add('visible');
