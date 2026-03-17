@@ -502,7 +502,7 @@
 // Set these once and deploy if you want to preconfigure either provider.
 const PRECONFIGURED_GOOGLE_CLIENT_ID = '';
 const PRECONFIGURED_MICROSOFT_CLIENT_ID = 'b4852587-3020-44d0-bf4b-a8f82bfcc8ac';
-const PRECONFIGURED_TRACKING_ENABLED = true;
+const PRECONFIGURED_TRACKING_ENABLED = false;
 const PRECONFIGURED_TRACKING_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFZlojQMxzp2qDC6QdipxZqy73bA44_JTlbomOzCCv2JCysNM2WpAsmF-yKIWW5pVx/exec';
 const PRECONFIGURED_TRACKING_STATUS_KEY = 'mailblast-open-2026-very-secret-48291';
 const LEGACY_GOOGLE_CLIENT_IDS = [
@@ -541,6 +541,12 @@ const TRACKING_POLL_MS = 20000;
 window.addEventListener('load', () => {
   document.getElementById('currentOrigin').textContent = getCurrentOriginDisplay();
   document.getElementById('currentRedirectUri').textContent = getMicrosoftRedirectUriDisplay();
+  if (!PRECONFIGURED_TRACKING_ENABLED
+    && localStorage.getItem('mb_tracking_enabled') === '1'
+    && localStorage.getItem('mb_tracking_endpoint') === PRECONFIGURED_TRACKING_ENDPOINT
+    && localStorage.getItem('mb_tracking_status_key') === PRECONFIGURED_TRACKING_STATUS_KEY) {
+    localStorage.setItem('mb_tracking_enabled', '0');
+  }
   const savedInterval = localStorage.getItem('mb_send_interval_minutes');
   document.getElementById('sendIntervalMinutes').value = savedInterval || String(DEFAULT_SEND_INTERVAL_MINUTES);
   const savedOptOut = localStorage.getItem('mb_include_opt_out');
@@ -1247,49 +1253,15 @@ async function sendViaGmail(to, subject, body, trackingRecord = null) {
     } else {
       mimeMessage = buildMimePlain(to, subject, body, trackingRecord);
     }
-    let resp = null;
-    let payload = null;
-    let uploadError = null;
-
-    try {
-      resp = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + accessToken,
-          'Content-Type': 'message/rfc822'
-        },
-        body: new TextEncoder().encode(mimeMessage)
-      });
-      payload = await readResponsePayload(resp);
-    } catch (err) {
-      uploadError = err;
-    }
-
-    if (!resp || !resp.ok) {
-      try {
-        const fallbackResp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + accessToken,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ raw: toBase64Url(mimeMessage) })
-        });
-        const fallbackPayload = await readResponsePayload(fallbackResp);
-        resp = fallbackResp;
-        payload = fallbackPayload;
-      } catch (fallbackErr) {
-        const detail = uploadError
-          ? 'Browser blocked Gmail attachment upload before the request completed.'
-          : 'Network error while sending with Gmail.';
-        return {
-          ok: false,
-          provider: 'google',
-          status: 0,
-          detail
-        };
-      }
-    }
+    const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + accessToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ raw: toBase64Url(mimeMessage) })
+    });
+    const payload = await readResponsePayload(resp);
     if (resp.status === 401) {
       showToast('⚠️ Session expired. Please sign in again.');
       signOut();
@@ -1648,7 +1620,7 @@ async function refreshTrackingNow(silent = false) {
     syncTrackingLogMessages();
     if (!silent) showToast('Tracking refreshed.');
   } catch (e) {
-    if (!silent) showToast('⚠️ Could not refresh open tracking right now.');
+    if (!silent) showToast(`⚠️ ${getTrackingRequestErrorMessage(e)}`);
   }
 }
 
@@ -1752,7 +1724,7 @@ function requestTrackingJsonp(endpoint, params) {
     };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error('Tracker request timed out.'));
+      reject(new Error('Tracker endpoint timed out. It may not be public or may still be deploying.'));
     }, 10000);
 
     window[callbackName] = (payload) => {
@@ -1764,11 +1736,22 @@ function requestTrackingJsonp(endpoint, params) {
     script.onerror = () => {
       clearTimeout(timer);
       cleanup();
-      reject(new Error('Tracker request failed.'));
+      reject(new Error('Tracker endpoint could not be loaded. Check that the Apps Script web app is deployed for Anyone.'));
     };
     script.src = url;
     document.head.appendChild(script);
   });
+}
+
+function getTrackingRequestErrorMessage(err) {
+  const message = sanitizeHeaderValue(err?.message || '');
+  if (/public|anyone|deploy/i.test(message)) {
+    return message;
+  }
+  if (/timed out/i.test(message)) {
+    return 'Open tracking endpoint timed out. Redeploy the Apps Script web app and set access to Anyone.';
+  }
+  return message || 'Could not refresh open tracking right now.';
 }
 
 function buildTrackerUrl(endpoint, params) {
