@@ -107,9 +107,12 @@ function getCampaignStatus_(e) {
 function getSenderHistory_(e) {
   if (!hasValidStatusKey_(e)) return { ok: false, error: 'Invalid status key.' };
 
-  const viewer = getViewerFromAccessToken_(param_(e, 'token'));
+  const senderEmail = normalizeEmail_(param_(e, 'senderEmail'));
+  const viewer = senderEmail
+    ? { email: senderEmail, name: '' }
+    : getViewerFromAccessToken_(param_(e, 'token'));
   if (!viewer || !viewer.email) {
-    return { ok: false, error: 'Sign in with Google again, then refresh tracking history.' };
+    return { ok: false, error: 'Missing sender email for tracking history.' };
   }
 
   const sheet = getTrackerSheet_();
@@ -117,12 +120,12 @@ function getSenderHistory_(e) {
   if (lastRow < 2) return { ok: true, email: viewer.email, campaigns: [] };
 
   const rows = sheet.getRange(2, 1, lastRow - 1, TRACKER_HEADERS.length).getValues();
-  const senderEmail = normalizeEmail_(viewer.email);
+  const normalizedSenderEmail = normalizeEmail_(viewer.email);
   var campaignsById = {};
 
   rows.forEach(function(rawRow) {
     const row = normalizeTrackerRow_(rawRow);
-    if (normalizeEmail_(row[10]) !== senderEmail) return;
+    if (normalizeEmail_(row[10]) !== normalizedSenderEmail) return;
 
     const campaignId = String(row[1] || '');
     if (!campaignId) return;

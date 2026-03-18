@@ -346,7 +346,7 @@
           <div class="stat-row" style="margin-top:14px">
             <div class="stat-c"><div class="stat-n" id="histTracked">0</div><div class="stat-l">Tracked</div></div>
             <div class="stat-c"><div class="stat-n g" id="histOpened">0</div><div class="stat-l">Opened</div></div>
-            <div class="stat-c"><div class="stat-n" id="histPrefetched">0</div><div class="stat-l">Auto-fetch</div></div>
+            <div class="stat-c"><div class="stat-n" id="histPrefetched">0</div><div class="stat-l">Auto / Thread</div></div>
             <div class="stat-c"><div class="stat-n" id="histPending">0</div><div class="stat-l">Pending</div></div>
           </div>
           <div id="trackingHistoryMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;"></div>
@@ -492,7 +492,7 @@
           <div class="stat-row" style="margin-top:0">
             <div class="stat-c"><div class="stat-n" id="trackTracked">0</div><div class="stat-l">Tracked</div></div>
             <div class="stat-c"><div class="stat-n g" id="trackOpened">0</div><div class="stat-l">Opened</div></div>
-            <div class="stat-c"><div class="stat-n" id="trackPrefetched">0</div><div class="stat-l">Auto-fetch</div></div>
+            <div class="stat-c"><div class="stat-n" id="trackPrefetched">0</div><div class="stat-l">Auto / Thread</div></div>
             <div class="stat-c"><div class="stat-n" id="trackPending">0</div><div class="stat-l">Pending</div></div>
           </div>
           <div id="trackingMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">Tracking is off.</div>
@@ -579,6 +579,7 @@ const MICROSOFT_SCRIPT_URLS = [
 ];
 const TRACKING_POLL_MS = 20000;
 const TRACKING_PREFETCH_WINDOW_MS = 30 * 1000;
+const TRACKING_THREAD_OPEN_WINDOW_MS = 2 * 60 * 1000;
 const TRACKING_HISTORY_STORAGE_KEY = 'mb_tracking_campaign_history_v1';
 const TRACKING_HISTORY_SELECTION_KEY = 'mb_tracking_selected_campaign_id';
 const TRACKING_HISTORY_LIMIT = 25;
@@ -624,6 +625,7 @@ window.addEventListener('load', () => {
     localStorage.setItem('mb_tracking_status_key', PRECONFIGURED_TRACKING_STATUS_KEY.trim());
   }
   trackingCampaignHistory = loadTrackingCampaignHistory();
+  rebuildTrackingCampaignHistoryState();
   renderTrackingHistorySection();
   if (googleClientId || microsoftClientId) {
     showMainApp();
@@ -1068,6 +1070,7 @@ function upsertTrackingCampaignHistory(campaign) {
   trackingCampaignHistory.unshift(snapshot);
   trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
   trackingCampaignHistory = trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT);
+  rebuildTrackingCampaignHistoryState();
   setTrackingHistorySelectionId(snapshot.id);
   persistTrackingCampaignHistory();
   renderTrackingHistorySection();
@@ -1098,9 +1101,22 @@ function mergeRemoteTrackingHistory(campaigns) {
   });
   trackingCampaignHistory.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
   trackingCampaignHistory = trackingCampaignHistory.slice(0, TRACKING_HISTORY_LIMIT);
+  rebuildTrackingCampaignHistoryState();
   persistTrackingCampaignHistory();
   renderTrackingPanel();
   renderTrackingHistorySection();
+}
+
+function rebuildTrackingCampaignHistoryState() {
+  trackingCampaignHistory = trackingCampaignHistory
+    .map(campaign => normalizeTrackingCampaignSnapshot(campaign, campaign))
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
+    .slice(0, TRACKING_HISTORY_LIMIT);
+
+  if (trackingCampaign?.id) {
+    trackingCampaign = normalizeTrackingCampaignSnapshot(trackingCampaign, trackingCampaign);
+  }
 }
 
 function buildTrackingCampaignLabel(campaign) {
@@ -1115,7 +1131,7 @@ function getTrackingCampaignCounts(campaign) {
   const records = Array.isArray(normalized?.records) ? normalized.records : [];
   const tracked = records.filter(record => record.state !== 'failed').length;
   const opened = records.filter(record => record.state === 'opened').length;
-  const prefetched = records.filter(record => record.state === 'prefetched').length;
+  const prefetched = records.filter(record => record.state === 'prefetched' || record.state === 'threaded').length;
   const pending = Math.max(tracked - opened - prefetched - records.filter(record => record.state === 'error').length, 0);
   return { tracked, opened, prefetched, pending };
 }
@@ -1134,13 +1150,17 @@ function buildTrackingCampaignRowsHtml(campaign) {
       ? 'Opened'
       : record.state === 'prefetched'
         ? 'Likely auto-fetch'
+      : record.state === 'threaded'
+        ? 'Likely thread reopen'
       : record.state === 'error'
         ? 'Tracking error'
       : record.state === 'failed'
         ? 'Not sent'
         : 'Pending';
     const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
-    const openCount = record.state === 'opened' || record.state === 'prefetched' ? String(record.openCount || 1) : '—';
+    const openCount = record.state === 'opened' || record.state === 'prefetched' || record.state === 'threaded'
+      ? String(record.openCount || 1)
+      : '—';
     return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
   }).join('');
 }
@@ -1275,7 +1295,7 @@ async function syncRemoteTrackingHistoryForCurrentUser(silent = true, throwOnErr
     const payload = await requestTrackingJsonp(cfg.endpoint, {
       action: 'history',
       key: cfg.statusKey,
-      token: accessToken
+      senderEmail
     });
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking history fetch failed.');
     mergeRemoteTrackingHistory(Array.isArray(payload.campaigns) ? payload.campaigns : []);
@@ -1995,7 +2015,7 @@ function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
 
     if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
       record.openedAt = record.lastOpenedAt || record.firstOpenedAt || record.openedAt;
-      record.state = isLikelyPrefetchedOpen(record) ? 'prefetched' : 'opened';
+      record.state = resolveTrackingRecordState(record);
     } else if (record.state !== 'error') {
       record.state = record.sentAt ? 'pending' : 'queued';
     }
@@ -2021,7 +2041,7 @@ function buildTrackingCampaignSummary(campaign, counts = getTrackingCampaignCoun
   const parts = [
     `${recipientsCount} recipient${recipientsCount === 1 ? '' : 's'}`,
     `${counts.opened} opened`,
-    counts.prefetched ? `${counts.prefetched} auto-fetch` : `${counts.pending} pending`
+    counts.prefetched ? `${counts.prefetched} auto/thread` : `${counts.pending} pending`
   ];
   const subject = String((normalized?.records || []).find(record => record?.subject)?.subject || '').trim();
   if (subject) parts.push(trimText(subject, 58));
@@ -2041,7 +2061,7 @@ function buildTrackingPixelHtml(trackingRecord) {
 
 async function registerTrackingSend(trackingRecord) {
   if (!trackingCampaign) return;
-  const payload = await requestTrackingJsonp(trackingCampaign.endpoint, {
+  const params = {
     action: 'register',
     key: trackingCampaign.statusKey,
     campaign: trackingCampaign.id,
@@ -2053,8 +2073,17 @@ async function registerTrackingSend(trackingRecord) {
     senderName: trackingCampaign.senderName || senderName || '',
     provider: trackingCampaign.provider || authProvider || '',
     subject: trackingRecord.subject || ''
-  });
-  if (!payload?.ok) throw new Error(payload?.error || 'Tracking registration failed.');
+  };
+
+  try {
+    const payload = await requestTrackingJsonp(trackingCampaign.endpoint, params);
+    if (!payload?.ok) throw new Error(payload?.error || 'Tracking registration failed.');
+    return true;
+  } catch (error) {
+    const sent = await sendTrackingRegistrationFallback(trackingCampaign.endpoint, params);
+    if (sent) return true;
+    throw error;
+  }
 }
 
 async function refreshTrackingNow(silent = false) {
@@ -2099,7 +2128,7 @@ function mergeTrackingStatusIntoCampaign(campaign, records) {
       record.firstOpenedAt = firstOpenedAt || record.firstOpenedAt;
       record.lastOpenedAt = lastOpenedAt || record.lastOpenedAt;
       record.openedAt = lastOpenedAt || firstOpenedAt || record.openedAt;
-      record.state = isLikelyPrefetchedOpen(record) ? 'prefetched' : 'opened';
+      record.state = resolveTrackingRecordState(record);
     } else if (record.state !== 'error' && record.state !== 'failed') {
       record.state = 'pending';
     }
@@ -2112,6 +2141,57 @@ function isLikelyPrefetchedOpen(record) {
   const firstOpenMs = Date.parse(record.firstOpenedAt || record.openedAt || '');
   if (!Number.isFinite(sentMs) || !Number.isFinite(firstOpenMs)) return false;
   return firstOpenMs >= sentMs && firstOpenMs - sentMs <= TRACKING_PREFETCH_WINDOW_MS;
+}
+
+function resolveTrackingRecordState(record) {
+  if (!record) return 'queued';
+  if (record.state === 'failed' || record.state === 'error') return record.state;
+  if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
+    if (isLikelyPrefetchedOpen(record)) return 'prefetched';
+    if (isLikelyThreadReopen(record)) return 'threaded';
+    return 'opened';
+  }
+  return record.sentAt ? 'pending' : 'queued';
+}
+
+function isLikelyThreadReopen(record) {
+  if ((record?.openCount || 0) !== 1) return false;
+  const currentOpenMs = Date.parse(record?.firstOpenedAt || record?.openedAt || '');
+  const sentMs = Date.parse(record?.sentAt || '');
+  const email = normalizeTrackingEmail(record?.email || '');
+  const subject = sanitizeHeaderValue(record?.subject || '');
+  if (!Number.isFinite(currentOpenMs) || !Number.isFinite(sentMs) || !email || !subject) return false;
+
+  return getAllTrackedRecords().some(existingRecord => {
+    if (!existingRecord || String(existingRecord.id || '') === String(record.id || '')) return false;
+    if (normalizeTrackingEmail(existingRecord.email || '') !== email) return false;
+    if (sanitizeHeaderValue(existingRecord.subject || '') !== subject) return false;
+
+    const existingSentMs = Date.parse(existingRecord.sentAt || '');
+    const relatedOpenMs = Date.parse(existingRecord.lastOpenedAt || existingRecord.openedAt || existingRecord.firstOpenedAt || '');
+    if (!Number.isFinite(existingSentMs) || !Number.isFinite(relatedOpenMs)) return false;
+    if (existingSentMs >= sentMs) return false;
+    return Math.abs(relatedOpenMs - currentOpenMs) <= TRACKING_THREAD_OPEN_WINDOW_MS;
+  });
+}
+
+function getAllTrackedRecords() {
+  const seenCampaigns = new Set();
+  const campaigns = [];
+
+  if (Array.isArray(trackingCampaignHistory)) {
+    trackingCampaignHistory.forEach(campaign => {
+      if (!campaign?.id || seenCampaigns.has(campaign.id)) return;
+      seenCampaigns.add(campaign.id);
+      campaigns.push(campaign);
+    });
+  }
+
+  if (trackingCampaign?.id && !seenCampaigns.has(trackingCampaign.id)) {
+    campaigns.push(trackingCampaign);
+  }
+
+  return campaigns.flatMap(campaign => Array.isArray(campaign?.records) ? campaign.records : []);
 }
 
 function renderTrackingPanel() {
@@ -2130,7 +2210,7 @@ function renderTrackingPanel() {
   wrap.style.display = 'block';
   const tracked = trackingCampaign.records.filter(record => record.state !== 'failed').length;
   const opened = trackingCampaign.records.filter(record => record.state === 'opened').length;
-  const prefetched = trackingCampaign.records.filter(record => record.state === 'prefetched').length;
+  const prefetched = trackingCampaign.records.filter(record => record.state === 'prefetched' || record.state === 'threaded').length;
   const pending = Math.max(tracked - opened - prefetched - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
 
   document.getElementById('trackTracked').textContent = tracked;
@@ -2138,7 +2218,7 @@ function renderTrackingPanel() {
   document.getElementById('trackPrefetched').textContent = prefetched;
   document.getElementById('trackPending').textContent = pending;
   meta.textContent = trackingCampaign.lastSyncedAt
-    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)} · Outlook/Microsoft 365 auto-fetches may be shown separately`
+    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)} · auto-fetches or prior-thread reloads may be shown separately`
     : `Campaign ${trackingCampaign.id} · waiting for the first refresh`;
 
   tbody.innerHTML = buildTrackingCampaignRowsHtml(trackingCampaign);
@@ -2153,6 +2233,8 @@ function syncTrackingLogMessages() {
       setStatus(record.logIndex, 'sent', `Sent ✓ · opened ${formatDateTime(record.openedAt)}${suffix}`);
     } else if (record.state === 'prefetched') {
       setStatus(record.logIndex, 'sent', `Sent ✓ · likely auto-fetched ${formatDateTime(record.openedAt)}`);
+    } else if (record.state === 'threaded') {
+      setStatus(record.logIndex, 'sent', `Sent ✓ · likely prior-thread reopen ${formatDateTime(record.openedAt)}`);
     } else if (record.state === 'pending') {
       setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking pending');
     } else if (record.state === 'error') {
@@ -2204,6 +2286,21 @@ function requestTrackingJsonp(endpoint, params) {
     script.src = url;
     document.head.appendChild(script);
   });
+}
+
+async function sendTrackingRegistrationFallback(endpoint, params) {
+  const url = buildTrackerUrl(endpoint, { ...params, transport: 'beacon', cb: Date.now() });
+  try {
+    await fetch(url, {
+      method: 'GET',
+      mode: 'no-cors',
+      cache: 'no-store',
+      credentials: 'omit'
+    });
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 function getTrackingRequestErrorMessage(err) {
