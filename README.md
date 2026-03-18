@@ -1,9 +1,24 @@
-# Reachout Tool (GitHub Pages)
+# Reachout Tool
 
-Static MailBlast site for GitHub Pages deployment.
+Static outreach app for GitHub Pages. The site lives in a single HTML file and lets you send personalized email campaigns through Gmail or Outlook / Microsoft 365.
 
 ## Website source
 - `docs/index.html`
+
+## Current features
+- Gmail sending through the Gmail API.
+- Outlook / Microsoft 365 sending through Microsoft Graph.
+- Personalized campaigns with merge tags like `{{name}}`.
+- CSV upload or pasted recipient lists with deduping and validation.
+- Optional opt-out footer.
+- Optional PDF attachment support.
+- Built-in pacing controls and basic deliverability guardrails.
+- Gmail open tracking through a Google Apps Script web app.
+- Live tracked-recipient status during send.
+- Campaign history that can be reopened after `Start Over`.
+- Shared Gmail tracking history sync from the tracker sheet when you sign in with the same Gmail account.
+- Local tracking-history cache so recent campaigns can still be refreshed from this browser even if shared history sync is unavailable.
+- Auto-fetch detection so very early one-hit opens are marked separately from likely real opens.
 
 ## Deploy (GitHub Pages)
 1. Push to `main`.
@@ -26,6 +41,11 @@ python3 -m http.server 8001
 
 Then open:
 - `http://localhost:8001/docs/index.html`
+
+Notes:
+- Gmail can work from `file://`, but Microsoft sign-in does not.
+- For Microsoft testing, use `http://localhost/...` or an `https://` URL.
+- GitHub Pages deployment uses `https://sunny-0102.github.io/Reachout_Tool-main/`.
 
 ## Google OAuth setup
 In Google Cloud Console OAuth client:
@@ -74,17 +94,23 @@ In Microsoft Entra App registrations:
 4. If you use a school or work tenant, grant admin consent if required.
 
 ## Notes
+- This is a static browser app. There is no backend server in this repo.
 - Microsoft sign-in does not work from `file://` URLs.
-- For local Microsoft testing, use `http://localhost/...` or an `https://` URL.
+- Outlook / Microsoft 365 direct send supports smaller attachments only in this app. Large PDFs should be sent through Gmail or reduced in size.
 - Open tracking is approximate because some mail clients block, proxy, or preload images.
+- Very early single opens are treated as likely auto-fetches instead of definite human opens.
 
 ## Gmail Open Tracking
-This repo now includes optional Gmail open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
+This repo includes optional Gmail open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
 
 ### What it does
 - Adds an optional tracking pixel to Gmail sends.
 - Logs each tracked recipient to a tracker endpoint after send.
-- Shows `pending` vs `opened` status in the app's send screen.
+- Shows `pending`, `opened`, and `likely auto-fetch` states in the app.
+- Keeps the active campaign refreshable from the send screen.
+- Saves tracked campaigns into browser history so they can be reopened after `Start Over`.
+- Syncs Gmail campaign history from the tracker sheet when the same Gmail account signs in again.
+- Falls back to the saved browser cache so selected campaigns can still refresh from this browser even if shared history sync fails.
 
 ### Tracker endpoint file
 - `tracker/google-apps-script/Code.gs`
@@ -103,4 +129,5 @@ This repo now includes optional Gmail open tracking in the app plus a lightweigh
 3. Paste your Apps Script `Web app URL`.
 4. Paste the same `TRACKER_STATUS_KEY` value into `Tracking Status Key`.
 5. Send your Gmail campaign.
-6. Use `Refresh Opens` in the send screen to pull the latest open data.
+6. Use the send-screen refresh action to pull the latest open data for the active campaign.
+7. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
