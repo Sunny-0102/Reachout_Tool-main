@@ -110,6 +110,7 @@ This repo includes optional open and link-click tracking in the app plus a light
 - Tracks common full links such as `https://...` and `www....` in the email body.
 - Logs each tracked recipient to a tracker endpoint after send.
 - Shows `pending`, `clicked`, `opened`, and `likely auto-fetch` states in the app.
+- This deployment ships with the shared tracker URL and status key hardcoded, so users do not need to paste tracking settings manually.
 - Keeps the active campaign refreshable from the send screen.
 - Saves tracked campaigns into browser history so they can be reopened after `Start Over`.
 - Syncs Gmail campaign history from the tracker sheet when the same Gmail account signs in again.
@@ -129,8 +130,8 @@ This repo includes optional open and link-click tracking in the app plus a light
 ### MailBlast app setup
 1. Sign in with your sender account in the MailBlast app.
 2. In `Preview & Review`, enable engagement tracking.
-3. Paste your Apps Script `Web app URL`.
-4. Paste the same `TRACKER_STATUS_KEY` value into `Tracking Status Key`.
+3. If you are using this published deployment, the tracker URL and status key are already built in.
+4. If you are running your own copy, paste your Apps Script `Web app URL` and the same `TRACKER_STATUS_KEY` value into the tracking fields.
 5. Send your campaign.
 6. Use the send-screen refresh action to pull the latest open and click data for the active campaign.
 7. For company-mail tracking, include at least one full link in the email body, such as `https://...` or `www....`, so click activity can be recorded even when image opens are hidden.

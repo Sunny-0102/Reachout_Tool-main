@@ -545,7 +545,7 @@
 // Google OAuth client IDs are public-safe and should be embedded here for shared/public deployments.
 const PRECONFIGURED_GOOGLE_CLIENT_ID = '511791686947-4op425a7n3lts77ujs8fe47h0cgmgcsa.apps.googleusercontent.com';
 const PRECONFIGURED_MICROSOFT_CLIENT_ID = 'b4852587-3020-44d0-bf4b-a8f82bfcc8ac';
-const PRECONFIGURED_TRACKING_ENABLED = false;
+const PRECONFIGURED_TRACKING_ENABLED = true;
 const PRECONFIGURED_TRACKING_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFZlojQMxzp2qDC6QdipxZqy73bA44_JTlbomOzCCv2JCysNM2WpAsmF-yKIWW5pVx/exec';
 const PRECONFIGURED_TRACKING_STATUS_KEY = 'mailblast-open-2026-very-secret-48291';
 const LEGACY_GOOGLE_CLIENT_IDS = [
@@ -1012,6 +1012,10 @@ function saveTrackingSettings() {
   updateTrackingSettingsUi();
 }
 
+function isTrackingHardcoded() {
+  return !!(PRECONFIGURED_TRACKING_ENDPOINT && PRECONFIGURED_TRACKING_STATUS_KEY);
+}
+
 function loadTrackingCampaignHistory() {
   try {
     const raw = localStorage.getItem(TRACKING_HISTORY_STORAGE_KEY);
@@ -1353,9 +1357,9 @@ async function refreshTrackingHistoryCampaign(campaign) {
 
 function getTrackingConfig() {
   return {
-    enabled: !!document.getElementById('enableOpenTracking')?.checked,
-    endpoint: String(document.getElementById('trackingEndpoint')?.value || '').trim(),
-    statusKey: String(document.getElementById('trackingStatusKey')?.value || '').trim()
+    enabled: PRECONFIGURED_TRACKING_ENABLED || !!document.getElementById('enableOpenTracking')?.checked,
+    endpoint: String(PRECONFIGURED_TRACKING_ENDPOINT || document.getElementById('trackingEndpoint')?.value || '').trim(),
+    statusKey: String(PRECONFIGURED_TRACKING_STATUS_KEY || document.getElementById('trackingStatusKey')?.value || '').trim()
   };
 }
 
@@ -1363,11 +1367,32 @@ function updateTrackingSettingsUi() {
   const cfg = getTrackingConfig();
   const fields = document.getElementById('trackingFields');
   const help = document.getElementById('trackingHelp');
+  const enabledToggle = document.getElementById('enableOpenTracking');
+  const endpointInput = document.getElementById('trackingEndpoint');
+  const statusKeyInput = document.getElementById('trackingStatusKey');
+  const hardcoded = isTrackingHardcoded();
+  if (enabledToggle) {
+    if (PRECONFIGURED_TRACKING_ENABLED) enabledToggle.checked = true;
+    enabledToggle.disabled = PRECONFIGURED_TRACKING_ENABLED;
+  }
+  if (endpointInput) {
+    if (PRECONFIGURED_TRACKING_ENDPOINT) endpointInput.value = PRECONFIGURED_TRACKING_ENDPOINT;
+    endpointInput.readOnly = hardcoded;
+  }
+  if (statusKeyInput) {
+    if (PRECONFIGURED_TRACKING_STATUS_KEY) statusKeyInput.value = PRECONFIGURED_TRACKING_STATUS_KEY;
+    statusKeyInput.readOnly = hardcoded;
+  }
   if (fields) fields.style.display = cfg.enabled ? 'block' : 'none';
   if (!help) return;
 
   if (!cfg.enabled) {
     help.textContent = 'Requires the Google Apps Script tracker endpoint. Company mailboxes often block or proxy image opens, so tracked link clicks are usually the strongest signal.';
+    return;
+  }
+
+  if (hardcoded) {
+    help.textContent = 'Engagement tracking is preconfigured for this deployment. Everyone uses the built-in tracker URL and status key automatically. Company inboxes still track best when the email includes a full link like https://... or www....';
     return;
   }
 
