@@ -2529,7 +2529,7 @@ function assessCampaignRisk({ subject, body, recipientsCount, hasAttachment, int
   const warnings = [];
   const blocks = [];
   const text = `${subject}\n${body}`.toLowerCase();
-  const linkCount = ((body || '').match(/https?:\/\//gi) || []).length;
+  const linkCount = getTrackableLinkMatches(body).length;
   const spammyTerms = [
     'urgent',
     'act now',
@@ -2552,6 +2552,7 @@ function assessCampaignRisk({ subject, body, recipientsCount, hasAttachment, int
 
   if (hasAttachment && recipientsCount > 1) warnings.push('Attachment + bulk sends have higher spam risk.');
   if (linkCount > 2) warnings.push('Too many links in one email can trigger spam filters.');
+  if (getTrackingConfig().enabled && linkCount < 1) warnings.push('Company-inbox tracking works best when the email includes at least one full link like https://... or www....');
   if ((subject || '').trim().length < 4) warnings.push('Very short subject lines can look suspicious.');
   if ((body || '').trim().length < 40) warnings.push('Very short body text can look low-trust.');
   if (hitSpamTerms.length) warnings.push(`Spam-trigger wording detected: ${hitSpamTerms.slice(0,2).join(', ')}.`);
@@ -2685,18 +2686,41 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
+function getTrackableLinkMatches(text) {
+  return String(text || '').match(/(?:https?:\/\/|www\.)[^\s<>"')]+/gi) || [];
+}
+
+function splitTrailingUrlPunctuation(rawUrl) {
+  let url = String(rawUrl || '');
+  let trailing = '';
+  while (/[.,!?;:]+$/.test(url)) {
+    trailing = url.slice(-1) + trailing;
+    url = url.slice(0, -1);
+  }
+  return { url, trailing };
+}
+
+function normalizeTrackableUrl(rawUrl) {
+  const clean = String(rawUrl || '').trim();
+  if (!clean) return '';
+  return /^www\./i.test(clean) ? `https://${clean}` : clean;
+}
+
 function renderTrackedTextLineHtml(text, trackingRecord = null) {
   const raw = String(text || '');
-  const urlRe = /https?:\/\/[^\s<>"')]+/gi;
+  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')]+/gi;
   const parts = [];
   let lastIndex = 0;
   let match;
   while ((match = urlRe.exec(raw))) {
-    const url = match[0];
+    const rawUrl = match[0];
+    const { url, trailing } = splitTrailingUrlPunctuation(rawUrl);
+    const normalizedUrl = normalizeTrackableUrl(url);
     parts.push(escapeHtml(raw.slice(lastIndex, match.index)));
-    const href = buildTrackedLinkUrl(url, trackingRecord);
+    const href = buildTrackedLinkUrl(normalizedUrl, trackingRecord);
     parts.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" style="color:#0b57d0;text-decoration:underline">${escapeHtml(url)}</a>`);
-    lastIndex = match.index + url.length;
+    if (trailing) parts.push(escapeHtml(trailing));
+    lastIndex = match.index + rawUrl.length;
   }
   parts.push(escapeHtml(raw.slice(lastIndex)));
   return parts.join('');

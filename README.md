@@ -107,6 +107,7 @@ This repo includes optional open and link-click tracking in the app plus a light
 ### What it does
 - Adds an optional tracking pixel to Gmail and Outlook / Microsoft 365 sends.
 - Rewrites links in the HTML email so clicks are logged before redirecting the recipient.
+- Tracks common full links such as `https://...` and `www....` in the email body.
 - Logs each tracked recipient to a tracker endpoint after send.
 - Shows `pending`, `clicked`, `opened`, and `likely auto-fetch` states in the app.
 - Keeps the active campaign refreshable from the send screen.
@@ -132,4 +133,5 @@ This repo includes optional open and link-click tracking in the app plus a light
 4. Paste the same `TRACKER_STATUS_KEY` value into `Tracking Status Key`.
 5. Send your campaign.
 6. Use the send-screen refresh action to pull the latest open and click data for the active campaign.
-7. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
+7. For company-mail tracking, include at least one full link in the email body, such as `https://...` or `www....`, so click activity can be recorded even when image opens are hidden.
+8. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
