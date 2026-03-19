@@ -9,6 +9,10 @@ const TRACKER_HEADERS = [
   'firstOpenedAt',
   'lastOpenedAt',
   'openCount',
+  'firstClickedAt',
+  'lastClickedAt',
+  'clickCount',
+  'lastClickedUrl',
   'createdAt',
   'updatedAt',
   'senderEmail',
@@ -22,6 +26,7 @@ function doGet(e) {
   if (action === 'register') return respond_(e, registerSend_(e));
   if (action === 'status') return respond_(e, getCampaignStatus_(e));
   if (action === 'history') return respond_(e, getSenderHistory_(e));
+  if (action === 'click') return logClickRedirect_(e);
   return logOpen_(e);
 }
 
@@ -47,6 +52,10 @@ function registerSend_(e) {
     '',
     '',
     0,
+    '',
+    '',
+    0,
+    '',
     now,
     now,
     normalizeEmail_(param_(e, 'senderEmail')),
@@ -61,11 +70,11 @@ function registerSend_(e) {
     existing[2] = email;
     existing[3] = param_(e, 'name');
     existing[4] = param_(e, 'sentAt') || existing[4] || now;
-    existing[9] = now;
-    existing[10] = normalizeEmail_(param_(e, 'senderEmail'));
-    existing[11] = param_(e, 'senderName');
-    existing[12] = param_(e, 'provider');
-    existing[13] = param_(e, 'subject');
+    existing[13] = now;
+    existing[14] = normalizeEmail_(param_(e, 'senderEmail'));
+    existing[15] = param_(e, 'senderName');
+    existing[16] = param_(e, 'provider');
+    existing[17] = param_(e, 'subject');
     sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length).setValues([existing]);
   } else {
     sheet.appendRow(record);
@@ -97,7 +106,12 @@ function getCampaignStatus_(e) {
         firstOpenedAt: String(row[5] || ''),
         lastOpenedAt: String(row[6] || ''),
         openedAt: String(row[6] || row[5] || ''),
-        openCount: Number(row[7] || 0)
+        openCount: Number(row[7] || 0),
+        firstClickedAt: String(row[8] || ''),
+        lastClickedAt: String(row[9] || ''),
+        clickedAt: String(row[9] || row[8] || ''),
+        clickCount: Number(row[10] || 0),
+        lastClickedUrl: String(row[11] || '')
       };
     });
 
@@ -125,7 +139,7 @@ function getSenderHistory_(e) {
 
   rows.forEach(function(rawRow) {
     const row = normalizeTrackerRow_(rawRow);
-    if (normalizeEmail_(row[10]) !== normalizedSenderEmail) return;
+    if (normalizeEmail_(row[14]) !== normalizedSenderEmail) return;
 
     const campaignId = String(row[1] || '');
     if (!campaignId) return;
@@ -133,11 +147,11 @@ function getSenderHistory_(e) {
     if (!campaignsById[campaignId]) {
       campaignsById[campaignId] = {
         id: campaignId,
-        createdAt: String(row[8] || ''),
-        lastSyncedAt: String(row[9] || ''),
-        senderEmail: String(row[10] || ''),
-        senderName: String(row[11] || ''),
-        provider: String(row[12] || ''),
+        createdAt: String(row[12] || ''),
+        lastSyncedAt: String(row[13] || ''),
+        senderEmail: String(row[14] || ''),
+        senderName: String(row[15] || ''),
+        provider: String(row[16] || ''),
         records: []
       };
     }
@@ -146,16 +160,21 @@ function getSenderHistory_(e) {
       id: String(row[0] || ''),
       email: String(row[2] || ''),
       name: String(row[3] || ''),
-      subject: String(row[13] || ''),
+      subject: String(row[17] || ''),
       sentAt: String(row[4] || ''),
       firstOpenedAt: String(row[5] || ''),
       lastOpenedAt: String(row[6] || ''),
       openedAt: String(row[6] || row[5] || ''),
-      openCount: Number(row[7] || 0)
+      openCount: Number(row[7] || 0),
+      firstClickedAt: String(row[8] || ''),
+      lastClickedAt: String(row[9] || ''),
+      clickedAt: String(row[9] || row[8] || ''),
+      clickCount: Number(row[10] || 0),
+      lastClickedUrl: String(row[11] || '')
     });
 
-    if (String(row[9] || '') > String(campaignsById[campaignId].lastSyncedAt || '')) {
-      campaignsById[campaignId].lastSyncedAt = String(row[9] || '');
+    if (String(row[13] || '') > String(campaignsById[campaignId].lastSyncedAt || '')) {
+      campaignsById[campaignId].lastSyncedAt = String(row[13] || '');
     }
   });
 
@@ -181,16 +200,54 @@ function logOpen_(e) {
     if (!row[5]) row[5] = now;
     row[6] = now;
     row[7] = Number(row[7] || 0) + 1;
-    row[9] = now;
+    row[13] = now;
     range.setValues([row]);
   }
 
   return transparentPixel_();
 }
 
+function logClickRedirect_(e) {
+  const id = param_(e, 'id');
+  const destination = param_(e, 'url');
+  if (!id) return redirectOutput_(destination);
+
+  const sheet = getTrackerSheet_();
+  const rowNumber = findRowNumberById_(sheet, id);
+  if (rowNumber > 1) {
+    const range = sheet.getRange(rowNumber, 1, 1, TRACKER_HEADERS.length);
+    const row = normalizeTrackerRow_(range.getValues()[0]);
+    const now = new Date().toISOString();
+    if (!row[8]) row[8] = now;
+    row[9] = now;
+    row[10] = Number(row[10] || 0) + 1;
+    row[11] = destination;
+    row[13] = now;
+    range.setValues([row]);
+  }
+
+  return redirectOutput_(destination);
+}
+
 function transparentPixel_() {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>';
   return ContentService.createTextOutput(svg).setMimeType(ContentService.MimeType.XML);
+}
+
+function redirectOutput_(url) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) {
+    return HtmlService.createHtmlOutput('<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:16px">Invalid tracking link.</body></html>');
+  }
+
+  const escaped = escapeHtml_(target);
+  return HtmlService
+    .createHtmlOutput(
+      '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=' + escaped + '">' +
+      '<script>window.location.replace(' + JSON.stringify(target) + ');</script></head>' +
+      '<body style="font-family:Arial,sans-serif;padding:16px">Redirecting... <a href="' + escaped + '">Continue</a></body></html>'
+    )
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function respond_(e, payload) {
@@ -216,6 +273,14 @@ function param_(e, key) {
 
 function normalizeEmail_(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function escapeHtml_(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function getViewerFromAccessToken_(token) {
@@ -272,11 +337,38 @@ function findRowNumberById_(sheet, id) {
 }
 
 function normalizeTrackerRow_(row) {
-  if (row.length >= TRACKER_HEADERS.length) return row.slice(0, TRACKER_HEADERS.length);
-
   const normalized = new Array(TRACKER_HEADERS.length).fill('');
+  if (!row || !row.length) return normalized;
+
+  if (row.length >= TRACKER_HEADERS.length) {
+    for (var i = 0; i < TRACKER_HEADERS.length; i++) normalized[i] = row[i];
+    normalized[7] = Number(normalized[7] || 0);
+    normalized[10] = Number(normalized[10] || 0);
+    return normalized;
+  }
+
+  if (row.length >= 14) {
+    normalized[0] = row[0] || '';
+    normalized[1] = row[1] || '';
+    normalized[2] = row[2] || '';
+    normalized[3] = row[3] || '';
+    normalized[4] = row[4] || '';
+    normalized[5] = row[5] || '';
+    normalized[6] = row[6] || '';
+    normalized[7] = Number(row[7] || 0);
+    normalized[12] = row[8] || new Date().toISOString();
+    normalized[13] = row[9] || normalized[12];
+    normalized[14] = row[10] || '';
+    normalized[15] = row[11] || '';
+    normalized[16] = row[12] || '';
+    normalized[17] = row[13] || '';
+    return normalized;
+  }
+
   if (row.length === 10) {
     for (var j = 0; j < row.length; j++) normalized[j] = row[j];
+    normalized[7] = Number(normalized[7] || 0);
+    normalized[10] = Number(normalized[10] || 0);
     return normalized;
   }
 
@@ -290,7 +382,7 @@ function normalizeTrackerRow_(row) {
   normalized[5] = row[5] || '';
   normalized[6] = row[5] || '';
   normalized[7] = Number(row[6] || 0);
-  normalized[8] = row[7] || new Date().toISOString();
-  normalized[9] = row[8] || normalized[8];
+  normalized[12] = row[7] || new Date().toISOString();
+  normalized[13] = row[8] || normalized[12];
   return normalized;
 }

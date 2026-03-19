@@ -97,16 +97,18 @@ In Microsoft Entra App registrations:
 - This is a static browser app. There is no backend server in this repo.
 - Microsoft sign-in does not work from `file://` URLs.
 - Outlook / Microsoft 365 direct send supports smaller attachments only in this app. Large PDFs should be sent through Gmail or reduced in size.
-- Open tracking is approximate because some mail clients block, proxy, or preload images.
+- Open tracking is approximate because many mail clients, especially work inboxes, block, proxy, or preload images.
+- Link-click tracking is usually a more reliable signal for company mailboxes than image opens alone.
 - Very early single opens are treated as likely auto-fetches instead of definite human opens.
 
-## Gmail Open Tracking
-This repo includes optional Gmail open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
+## Email Engagement Tracking
+This repo includes optional open and link-click tracking in the app plus a lightweight Google Apps Script tracker endpoint.
 
 ### What it does
-- Adds an optional tracking pixel to Gmail sends.
+- Adds an optional tracking pixel to Gmail and Outlook / Microsoft 365 sends.
+- Rewrites links in the HTML email so clicks are logged before redirecting the recipient.
 - Logs each tracked recipient to a tracker endpoint after send.
-- Shows `pending`, `opened`, and `likely auto-fetch` states in the app.
+- Shows `pending`, `clicked`, `opened`, and `likely auto-fetch` states in the app.
 - Keeps the active campaign refreshable from the send screen.
 - Saves tracked campaigns into browser history so they can be reopened after `Start Over`.
 - Syncs Gmail campaign history from the tracker sheet when the same Gmail account signs in again.
@@ -124,10 +126,10 @@ This repo includes optional Gmail open tracking in the app plus a lightweight Go
 6. Copy the deployed `Web app URL`.
 
 ### MailBlast app setup
-1. Sign in with Google in the MailBlast app.
-2. In `Preview & Review`, enable `Open tracking`.
+1. Sign in with your sender account in the MailBlast app.
+2. In `Preview & Review`, enable engagement tracking.
 3. Paste your Apps Script `Web app URL`.
 4. Paste the same `TRACKER_STATUS_KEY` value into `Tracking Status Key`.
-5. Send your Gmail campaign.
-6. Use the send-screen refresh action to pull the latest open data for the active campaign.
+5. Send your campaign.
+6. Use the send-screen refresh action to pull the latest open and click data for the active campaign.
 7. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
