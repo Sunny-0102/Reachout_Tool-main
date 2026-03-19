@@ -98,18 +98,15 @@ In Microsoft Entra App registrations:
 - Microsoft sign-in does not work from `file://` URLs.
 - Outlook / Microsoft 365 direct send supports smaller attachments only in this app. Large PDFs should be sent through Gmail or reduced in size.
 - Open tracking is approximate because many mail clients, especially work inboxes, block, proxy, or preload images.
-- Link-click tracking is usually a more reliable signal for company mailboxes than image opens alone.
 - Very early single opens are treated as likely auto-fetches instead of definite human opens.
 
-## Email Engagement Tracking
-This repo includes optional open and link-click tracking in the app plus a lightweight Google Apps Script tracker endpoint.
+## Open Tracking
+This repo includes optional open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
 
 ### What it does
 - Adds an optional tracking pixel to Gmail and Outlook / Microsoft 365 sends.
-- Rewrites links in the HTML email so clicks are logged before redirecting the recipient.
-- Tracks common full links such as `https://...` and `www....` in the email body.
 - Logs each tracked recipient to a tracker endpoint after send.
-- Shows `pending`, `clicked`, `opened`, and `likely auto-fetch` states in the app.
+- Shows `pending`, `opened`, and `likely auto-fetch` states in the app.
 - This deployment ships with the shared tracker URL and status key hardcoded, so users do not need to paste tracking settings manually.
 - Keeps the active campaign refreshable from the send screen.
 - Saves tracked campaigns into browser history so they can be reopened after `Start Over`.
@@ -129,10 +126,12 @@ This repo includes optional open and link-click tracking in the app plus a light
 
 ### MailBlast app setup
 1. Sign in with your sender account in the MailBlast app.
-2. In `Preview & Review`, enable engagement tracking.
+2. In `Preview & Review`, enable open tracking.
 3. If you are using this published deployment, the tracker URL and status key are already built in.
 4. If you are running your own copy, paste your Apps Script `Web app URL` and the same `TRACKER_STATUS_KEY` value into the tracking fields.
 5. Send your campaign.
-6. Use the send-screen refresh action to pull the latest open and click data for the active campaign.
-7. For company-mail tracking, include at least one full link in the email body, such as `https://...` or `www....`, so click activity can be recorded even when image opens are hidden.
-8. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
+6. Use the send-screen refresh action to pull the latest open data for the active campaign.
+7. After `Start Over`, open `Campaign History` and use `Refresh History` to reopen saved campaigns and refresh tracked status.
+
+## Limitation
+Without links, there is no reliable company-inbox-friendly engagement signal in this static email app beyond approximate image-open tracking. Many work mail systems block or proxy tracking pixels, so work-inbox results can still be incomplete.

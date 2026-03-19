@@ -345,8 +345,8 @@
           <div id="trackingHistoryEmpty" class="history-empty" style="display:none"></div>
           <div class="stat-row" style="margin-top:14px">
             <div class="stat-c"><div class="stat-n" id="histTracked">0</div><div class="stat-l">Tracked</div></div>
-            <div class="stat-c"><div class="stat-n g" id="histClicked">0</div><div class="stat-l">Clicked</div></div>
             <div class="stat-c"><div class="stat-n" id="histOpened">0</div><div class="stat-l">Opened</div></div>
+            <div class="stat-c"><div class="stat-n" id="histPrefetched">0</div><div class="stat-l">Auto / Thread</div></div>
             <div class="stat-c"><div class="stat-n" id="histPending">0</div><div class="stat-l">Pending</div></div>
           </div>
           <div id="trackingHistoryMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;"></div>
@@ -356,9 +356,8 @@
                 <tr>
                   <th>Recipient</th>
                   <th>Status</th>
-                  <th>Last Activity</th>
+                  <th>Last Opened</th>
                   <th>Opens</th>
-                  <th>Clicks</th>
                 </tr>
               </thead>
               <tbody id="trackingHistoryTbody"></tbody>
@@ -445,10 +444,10 @@
           </div>
         </div>
         <div style="margin-top:16px;max-width:520px">
-          <label>Engagement Tracking <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+          <label>Open Tracking <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
           <div class="check">
             <input id="enableOpenTracking" type="checkbox" />
-            <label for="enableOpenTracking" style="margin:0;font-weight:600">Track opens and link clicks</label>
+            <label for="enableOpenTracking" style="margin:0;font-weight:600">Track opens with a tracking pixel</label>
           </div>
           <div id="trackingFields" style="display:none;margin-top:10px">
             <div class="fld" style="margin-bottom:12px">
@@ -460,7 +459,7 @@
               <input type="text" id="trackingStatusKey" placeholder="Choose a private key used for status lookups" />
             </div>
             <div id="trackingHelp" style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">
-              Requires the Google Apps Script tracker endpoint. Company mailboxes often block or proxy image opens, so tracked link clicks are usually the strongest signal.
+              Requires the Google Apps Script tracker endpoint. Open tracking is approximate because many mail clients, especially work inboxes, block or proxy images.
             </div>
           </div>
         </div>
@@ -487,13 +486,13 @@
         </div>
         <div id="trackingWrap" style="display:none;margin-top:18px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-            <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px">Engagement Tracking</div>
-            <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="refreshTrackingNow()">Refresh Activity</button>
+            <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.8px">Open Tracking</div>
+            <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="refreshTrackingNow()">Refresh Opens</button>
           </div>
           <div class="stat-row" style="margin-top:0">
             <div class="stat-c"><div class="stat-n" id="trackTracked">0</div><div class="stat-l">Tracked</div></div>
-            <div class="stat-c"><div class="stat-n g" id="trackClicked">0</div><div class="stat-l">Clicked</div></div>
             <div class="stat-c"><div class="stat-n" id="trackOpened">0</div><div class="stat-l">Opened</div></div>
+            <div class="stat-c"><div class="stat-n" id="trackPrefetched">0</div><div class="stat-l">Auto / Thread</div></div>
             <div class="stat-c"><div class="stat-n" id="trackPending">0</div><div class="stat-l">Pending</div></div>
           </div>
           <div id="trackingMeta" style="margin-top:12px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">Tracking is off.</div>
@@ -503,9 +502,8 @@
                 <tr>
                   <th>Recipient</th>
                   <th>Status</th>
-                  <th>Last Activity</th>
+                  <th>Last Opened</th>
                   <th>Opens</th>
-                  <th>Clicks</th>
                 </tr>
               </thead>
               <tbody id="trackingTbody"></tbody>
@@ -1136,26 +1134,23 @@ function getTrackingCampaignCounts(campaign) {
   const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
   const records = Array.isArray(normalized?.records) ? normalized.records : [];
   const tracked = records.filter(record => record.state !== 'failed').length;
-  const clicked = records.filter(record => record.state === 'clicked').length;
   const opened = records.filter(record => record.state === 'opened').length;
   const prefetched = records.filter(record => record.state === 'prefetched' || record.state === 'threaded').length;
-  const pending = Math.max(tracked - clicked - opened - prefetched - records.filter(record => record.state === 'error').length, 0);
-  return { tracked, clicked, opened, prefetched, pending };
+  const pending = Math.max(tracked - opened - prefetched - records.filter(record => record.state === 'error').length, 0);
+  return { tracked, opened, prefetched, pending };
 }
 
 function buildTrackingCampaignRowsHtml(campaign) {
   const normalized = normalizeTrackingCampaignSnapshot(campaign, campaign);
   const records = normalized?.records || [];
   if (!records.length) {
-    return '<tr><td colspan="5" style="color:var(--text3);text-align:center;padding:14px">No tracked recipients in this campaign yet.</td></tr>';
+    return '<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:14px">No tracked recipients in this campaign yet.</td></tr>';
   }
   return records.map(record => {
     const label = record.name
       ? `${escapeHtml(record.email)} · <span class="log-name-txt">${escapeHtml(record.name)}</span>`
       : escapeHtml(record.email);
-    const status = record.state === 'clicked'
-      ? 'Clicked link'
-      : record.state === 'opened'
+    const status = record.state === 'opened'
       ? 'Opened'
       : record.state === 'prefetched'
         ? 'Likely auto-fetch'
@@ -1166,10 +1161,9 @@ function buildTrackingCampaignRowsHtml(campaign) {
       : record.state === 'failed'
         ? 'Not sent'
         : 'Pending';
-    const lastActivity = getTrackingLastActivityAt(record);
+    const openedAt = record.openedAt ? formatDateTime(record.openedAt) : '—';
     const openCount = record.openCount > 0 ? String(record.openCount) : '—';
-    const clickCount = record.clickCount > 0 ? String(record.clickCount) : '—';
-    return `<tr><td>${label}</td><td>${status}</td><td>${lastActivity ? formatDateTime(lastActivity) : '—'}</td><td>${openCount}</td><td>${clickCount}</td></tr>`;
+    return `<tr><td>${label}</td><td>${status}</td><td>${openedAt}</td><td>${openCount}</td></tr>`;
   }).join('');
 }
 
@@ -1190,13 +1184,13 @@ function renderTrackingHistorySection() {
     empty.textContent = senderEmail
       ? `No tracked campaigns have synced yet for ${senderEmail}. Click Refresh History to pull campaigns saved in the tracker sheet.`
       : 'Sign in with the sender account to load synced tracked campaigns here.';
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text3);text-align:center;padding:14px">No campaign selected yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:14px">No campaign selected yet.</td></tr>';
     meta.textContent = canSyncRemotely
       ? 'Campaign history stays shared through the tracker sheet, not just this browser.'
       : '';
     document.getElementById('histTracked').textContent = '0';
-    document.getElementById('histClicked').textContent = '0';
     document.getElementById('histOpened').textContent = '0';
+    document.getElementById('histPrefetched').textContent = '0';
     document.getElementById('histPending').textContent = '0';
     return;
   }
@@ -1223,8 +1217,8 @@ function renderTrackingHistorySection() {
 
   const counts = getTrackingCampaignCounts(campaign);
   document.getElementById('histTracked').textContent = counts.tracked;
-  document.getElementById('histClicked').textContent = counts.clicked;
   document.getElementById('histOpened').textContent = counts.opened;
+  document.getElementById('histPrefetched').textContent = counts.prefetched;
   document.getElementById('histPending').textContent = counts.pending;
   meta.textContent = campaign.lastSyncedAt
     ? `Campaign ${campaign.id} · sender ${campaign.senderEmail || 'unknown'} · last checked ${formatDateTime(campaign.lastSyncedAt)}${counts.prefetched ? ` · ${counts.prefetched} auto/thread` : ''}`
@@ -1387,16 +1381,16 @@ function updateTrackingSettingsUi() {
   if (!help) return;
 
   if (!cfg.enabled) {
-    help.textContent = 'Requires the Google Apps Script tracker endpoint. Company mailboxes often block or proxy image opens, so tracked link clicks are usually the strongest signal.';
+    help.textContent = 'Requires the Google Apps Script tracker endpoint. Open tracking is approximate because many mail clients, especially work inboxes, block or proxy images.';
     return;
   }
 
   if (hardcoded) {
-    help.textContent = 'Engagement tracking is preconfigured for this deployment. Everyone uses the built-in tracker URL and status key automatically. Company inboxes still track best when the email includes a full link like https://... or www....';
+    help.textContent = 'Open tracking is preconfigured for this deployment. Everyone uses the built-in tracker URL and status key automatically. Work inboxes may still hide opens, so the results remain approximate.';
     return;
   }
 
-  help.textContent = 'Tracked emails include a tiny image for opens plus tracked links for click activity. Opens are approximate, especially in company inboxes, but clicks usually reflect a real person.';
+  help.textContent = 'Tracked emails include a tiny image that logs opens to your tracker endpoint. Opens are approximate, especially in company inboxes, because many mail clients block or proxy images.';
 }
 
 function getTrackingValidationError() {
@@ -2005,12 +1999,7 @@ function createTrackingCampaign(recipientList, cfg) {
       openCount: 0,
       openedAt: '',
       firstOpenedAt: '',
-      lastOpenedAt: '',
-      clickCount: 0,
-      clickedAt: '',
-      firstClickedAt: '',
-      lastClickedAt: '',
-      lastClickedUrl: ''
+      lastOpenedAt: ''
     })),
     lastSyncedAt: ''
   };
@@ -2034,24 +2023,14 @@ function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
       openCount: Number(rawRecord?.openCount || rawRecord?.opens || existingRecord.openCount || 0),
       openedAt: String(rawRecord?.openedAt || rawRecord?.lastOpenedAt || rawRecord?.firstOpenedAt || existingRecord.openedAt || ''),
       firstOpenedAt: String(rawRecord?.firstOpenedAt || existingRecord.firstOpenedAt || ''),
-      lastOpenedAt: String(rawRecord?.lastOpenedAt || existingRecord.lastOpenedAt || ''),
-      clickCount: Number(rawRecord?.clickCount || existingRecord.clickCount || 0),
-      clickedAt: String(rawRecord?.clickedAt || rawRecord?.lastClickedAt || rawRecord?.firstClickedAt || existingRecord.clickedAt || ''),
-      firstClickedAt: String(rawRecord?.firstClickedAt || existingRecord.firstClickedAt || ''),
-      lastClickedAt: String(rawRecord?.lastClickedAt || existingRecord.lastClickedAt || ''),
-      lastClickedUrl: String(rawRecord?.lastClickedUrl || existingRecord.lastClickedUrl || '')
+      lastOpenedAt: String(rawRecord?.lastOpenedAt || existingRecord.lastOpenedAt || '')
     };
 
     if (!record.firstOpenedAt && record.openedAt) record.firstOpenedAt = record.openedAt;
     if (!record.lastOpenedAt && record.openedAt) record.lastOpenedAt = record.openedAt;
-    if (!record.firstClickedAt && record.clickedAt) record.firstClickedAt = record.clickedAt;
-    if (!record.lastClickedAt && record.clickedAt) record.lastClickedAt = record.clickedAt;
     if (record.state === 'failed') return record;
 
-    if (record.clickCount > 0 || record.firstClickedAt || record.lastClickedAt) {
-      record.clickedAt = record.lastClickedAt || record.firstClickedAt || record.clickedAt;
-      record.state = 'clicked';
-    } else if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
+    if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
       record.openedAt = record.lastOpenedAt || record.firstOpenedAt || record.openedAt;
       record.state = resolveTrackingRecordState(record);
     } else if (record.state !== 'error') {
@@ -2078,7 +2057,6 @@ function buildTrackingCampaignSummary(campaign, counts = getTrackingCampaignCoun
   const recipientsCount = Array.isArray(normalized?.records) ? normalized.records.length : 0;
   const parts = [
     `${recipientsCount} recipient${recipientsCount === 1 ? '' : 's'}`,
-    `${counts.clicked} clicked`,
     `${counts.opened} opened`,
     counts.prefetched ? `${counts.prefetched} auto/thread` : `${counts.pending} pending`
   ];
@@ -2096,16 +2074,6 @@ function buildTrackingPixelHtml(trackingRecord) {
   });
   const safeSrc = escapeHtml(pixelUrl);
   return `<img src="${safeSrc}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;opacity:0" referrerpolicy="no-referrer" />`;
-}
-
-function buildTrackedLinkUrl(rawUrl, trackingRecord) {
-  if (!trackingRecord || !trackingCampaign?.endpoint) return rawUrl;
-  return buildTrackerUrl(trackingCampaign.endpoint, {
-    action: 'click',
-    campaign: trackingCampaign.id,
-    id: trackingRecord.id,
-    url: rawUrl
-  });
 }
 
 async function registerTrackingSend(trackingRecord) {
@@ -2172,20 +2140,11 @@ function mergeTrackingStatusIntoCampaign(campaign, records) {
     const openCount = Number(hit.openCount || hit.opens || 0);
     const firstOpenedAt = String(hit.firstOpenedAt || hit.openedAt || '').trim();
     const lastOpenedAt = String(hit.lastOpenedAt || hit.openedAt || '').trim();
-    const clickCount = Number(hit.clickCount || 0);
-    const firstClickedAt = String(hit.firstClickedAt || hit.clickedAt || '').trim();
-    const lastClickedAt = String(hit.lastClickedAt || hit.clickedAt || '').trim();
-    const lastClickedUrl = String(hit.lastClickedUrl || '').trim();
-    if (openCount > 0 || firstOpenedAt || lastOpenedAt || clickCount > 0 || firstClickedAt || lastClickedAt) {
-      if (openCount > 0 || firstOpenedAt || lastOpenedAt) record.openCount = openCount || Math.max(record.openCount || 0, 1);
+    if (openCount > 0 || firstOpenedAt || lastOpenedAt) {
+      record.openCount = openCount || Math.max(record.openCount || 0, 1);
       record.firstOpenedAt = firstOpenedAt || record.firstOpenedAt;
       record.lastOpenedAt = lastOpenedAt || record.lastOpenedAt;
       record.openedAt = lastOpenedAt || firstOpenedAt || record.openedAt;
-      if (clickCount > 0 || firstClickedAt || lastClickedAt) record.clickCount = clickCount || Math.max(record.clickCount || 0, 1);
-      record.firstClickedAt = firstClickedAt || record.firstClickedAt;
-      record.lastClickedAt = lastClickedAt || record.lastClickedAt;
-      record.clickedAt = lastClickedAt || firstClickedAt || record.clickedAt;
-      record.lastClickedUrl = lastClickedUrl || record.lastClickedUrl;
       record.state = resolveTrackingRecordState(record);
     } else if (record.state !== 'error' && record.state !== 'failed') {
       record.state = 'pending';
@@ -2201,21 +2160,9 @@ function isLikelyPrefetchedOpen(record) {
   return firstOpenMs >= sentMs && firstOpenMs - sentMs <= TRACKING_PREFETCH_WINDOW_MS;
 }
 
-function getTrackingLastActivityAt(record) {
-  const lastClick = String(record?.lastClickedAt || record?.firstClickedAt || record?.clickedAt || '').trim();
-  const lastOpen = String(record?.lastOpenedAt || record?.firstOpenedAt || record?.openedAt || '').trim();
-  const clickMs = Date.parse(lastClick);
-  const openMs = Date.parse(lastOpen);
-  if (Number.isFinite(clickMs) && (!Number.isFinite(openMs) || clickMs >= openMs)) return lastClick;
-  return lastOpen;
-}
-
 function resolveTrackingRecordState(record) {
   if (!record) return 'queued';
   if (record.state === 'failed' || record.state === 'error') return record.state;
-  if (record.clickCount > 0 || record.firstClickedAt || record.lastClickedAt) {
-    return 'clicked';
-  }
   if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
     if (isLikelyPrefetchedOpen(record)) return 'prefetched';
     if (isLikelyThreadReopen(record)) return 'threaded';
@@ -2279,17 +2226,16 @@ function renderTrackingPanel() {
 
   wrap.style.display = 'block';
   const tracked = trackingCampaign.records.filter(record => record.state !== 'failed').length;
-  const clicked = trackingCampaign.records.filter(record => record.state === 'clicked').length;
   const opened = trackingCampaign.records.filter(record => record.state === 'opened').length;
   const prefetched = trackingCampaign.records.filter(record => record.state === 'prefetched' || record.state === 'threaded').length;
-  const pending = Math.max(tracked - clicked - opened - prefetched - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
+  const pending = Math.max(tracked - opened - prefetched - trackingCampaign.records.filter(record => record.state === 'error').length, 0);
 
   document.getElementById('trackTracked').textContent = tracked;
-  document.getElementById('trackClicked').textContent = clicked;
   document.getElementById('trackOpened').textContent = opened;
+  document.getElementById('trackPrefetched').textContent = prefetched;
   document.getElementById('trackPending').textContent = pending;
   meta.textContent = trackingCampaign.lastSyncedAt
-    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)}${prefetched ? ` · ${prefetched} auto/thread` : ''} · company mailboxes may hide opens, but clicks still count`
+    ? `Campaign ${trackingCampaign.id} · last checked ${formatDateTime(trackingCampaign.lastSyncedAt)}${prefetched ? ` · ${prefetched} auto/thread` : ''} · work inboxes may still hide opens`
     : `Campaign ${trackingCampaign.id} · waiting for the first refresh`;
 
   tbody.innerHTML = buildTrackingCampaignRowsHtml(trackingCampaign);
@@ -2299,10 +2245,7 @@ function syncTrackingLogMessages() {
   if (!trackingCampaign) return;
   trackingCampaign.records.forEach(record => {
     if (record.logIndex == null) return;
-    if (record.state === 'clicked') {
-      const suffix = record.clickCount > 1 ? ` · ${record.clickCount} clicks` : '';
-      setStatus(record.logIndex, 'sent', `Sent ✓ · clicked link ${formatDateTime(record.clickedAt || record.lastClickedAt || record.firstClickedAt)}${suffix}`);
-    } else if (record.state === 'opened') {
+    if (record.state === 'opened') {
       const suffix = record.openCount > 1 ? ` · ${record.openCount} opens` : '';
       setStatus(record.logIndex, 'sent', `Sent ✓ · opened ${formatDateTime(record.openedAt)}${suffix}`);
     } else if (record.state === 'prefetched') {
@@ -2554,7 +2497,7 @@ function assessCampaignRisk({ subject, body, recipientsCount, hasAttachment, int
   const warnings = [];
   const blocks = [];
   const text = `${subject}\n${body}`.toLowerCase();
-  const linkCount = getTrackableLinkMatches(body).length;
+  const linkCount = ((body || '').match(/(?:https?:\/\/|www\.)/gi) || []).length;
   const spammyTerms = [
     'urgent',
     'act now',
@@ -2577,7 +2520,6 @@ function assessCampaignRisk({ subject, body, recipientsCount, hasAttachment, int
 
   if (hasAttachment && recipientsCount > 1) warnings.push('Attachment + bulk sends have higher spam risk.');
   if (linkCount > 2) warnings.push('Too many links in one email can trigger spam filters.');
-  if (getTrackingConfig().enabled && linkCount < 1) warnings.push('Company-inbox tracking works best when the email includes at least one full link like https://... or www....');
   if ((subject || '').trim().length < 4) warnings.push('Very short subject lines can look suspicious.');
   if ((body || '').trim().length < 40) warnings.push('Very short body text can look low-trust.');
   if (hitSpamTerms.length) warnings.push(`Spam-trigger wording detected: ${hitSpamTerms.slice(0,2).join(', ')}.`);
@@ -2711,50 +2653,11 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
-function getTrackableLinkMatches(text) {
-  return String(text || '').match(/(?:https?:\/\/|www\.)[^\s<>"')]+/gi) || [];
-}
-
-function splitTrailingUrlPunctuation(rawUrl) {
-  let url = String(rawUrl || '');
-  let trailing = '';
-  while (/[.,!?;:]+$/.test(url)) {
-    trailing = url.slice(-1) + trailing;
-    url = url.slice(0, -1);
-  }
-  return { url, trailing };
-}
-
-function normalizeTrackableUrl(rawUrl) {
-  const clean = String(rawUrl || '').trim();
-  if (!clean) return '';
-  return /^www\./i.test(clean) ? `https://${clean}` : clean;
-}
-
-function renderTrackedTextLineHtml(text, trackingRecord = null) {
-  const raw = String(text || '');
-  const urlRe = /(?:https?:\/\/|www\.)[^\s<>"')]+/gi;
-  const parts = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = urlRe.exec(raw))) {
-    const rawUrl = match[0];
-    const { url, trailing } = splitTrailingUrlPunctuation(rawUrl);
-    const normalizedUrl = normalizeTrackableUrl(url);
-    parts.push(escapeHtml(raw.slice(lastIndex, match.index)));
-    const href = buildTrackedLinkUrl(normalizedUrl, trackingRecord);
-    parts.push(`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" style="color:#0b57d0;text-decoration:underline">${escapeHtml(url)}</a>`);
-    if (trailing) parts.push(escapeHtml(trailing));
-    lastIndex = match.index + rawUrl.length;
-  }
-  parts.push(escapeHtml(raw.slice(lastIndex)));
-  return parts.join('');
-}
-
-function textToHtml(text, extraHtml = '', trackingRecord = null) {
-  const paragraphs = String(text || '')
+function textToHtml(text, extraHtml = '') {
+  const escaped = escapeHtml(text);
+  const paragraphs = escaped
     .split(/\n\n+/)
-    .map(p => `<p style="margin:0 0 14px 0;line-height:1.6">${p.split('\n').map(line => renderTrackedTextLineHtml(line, trackingRecord)).join('<br>')}</p>`)
+    .map(p => `<p style="margin:0 0 14px 0;line-height:1.6">${p.replace(/\n/g, '<br>')}</p>`)
     .join('\n');
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;margin:0;padding:0">${paragraphs}${extraHtml || ''}</body></html>`;
 }
