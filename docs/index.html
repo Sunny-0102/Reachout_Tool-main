@@ -459,7 +459,10 @@
               <input type="text" id="trackingStatusKey" placeholder="Choose a private key used for status lookups" />
             </div>
             <div id="trackingHelp" style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">
-              Requires the Google Apps Script tracker endpoint. Open tracking is approximate because many mail clients, especially work inboxes, block or proxy images.
+              Requires the Google Apps Script tracker endpoint. This open-only build pre-registers tracked recipients before send so very fast first opens are less likely to be missed.
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;line-height:1.6;">
+              Opens are still approximate because many work inboxes block, proxy, or preload images.
             </div>
           </div>
         </div>
@@ -1044,6 +1047,13 @@ function normalizeTrackingEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+function normalizeTrackingDeliveryState(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'queued') return 'queued';
+  return 'sent';
+}
+
 function getVisibleTrackingCampaignHistory() {
   const sender = normalizeTrackingEmail(senderEmail);
   if (!sender) return [];
@@ -1381,16 +1391,16 @@ function updateTrackingSettingsUi() {
   if (!help) return;
 
   if (!cfg.enabled) {
-    help.textContent = 'Requires the Google Apps Script tracker endpoint. Open tracking is approximate because many mail clients, especially work inboxes, block or proxy images.';
+    help.textContent = 'Requires the Google Apps Script tracker endpoint. This open-only build pre-registers tracked recipients before send so very fast first opens are less likely to be missed.';
     return;
   }
 
   if (hardcoded) {
-    help.textContent = 'Open tracking is preconfigured for this deployment. Everyone uses the built-in tracker URL and status key automatically. Work inboxes may still hide opens, so the results remain approximate.';
+    help.textContent = 'Open tracking is preconfigured for this deployment. Everyone uses the built-in tracker URL and status key automatically. The app primes each tracked recipient before send, but work inboxes may still hide opens.';
     return;
   }
 
-  help.textContent = 'Tracked emails include a tiny image that logs opens to your tracker endpoint. Opens are approximate, especially in company inboxes, because many mail clients block or proxy images.';
+  help.textContent = 'Tracked emails include an email-friendly pixel that logs opens to your tracker endpoint, and the app primes each tracked recipient before send to reduce missed first opens.';
 }
 
 function getTrackingValidationError() {
@@ -1603,31 +1613,43 @@ async function startSending() {
     setStatus(i, 'sending', 'Sending…');
     document.getElementById(`log-${i}`).scrollIntoView({ behavior:'smooth', block:'nearest' });
 
+    let trackingRegistered = false;
+    if (trackingRecord) {
+      trackingRecord.sentAt = new Date().toISOString();
+      trackingRecord.subject = subj;
+      trackingRecord.logIndex = i;
+      trackingRecord.deliveryState = 'queued';
+      try {
+        await registerTrackingSend(trackingRecord, 'queued');
+        trackingRegistered = true;
+      } catch (e) {}
+      saveActiveTrackingCampaign();
+    }
+
     const result = await sendEmail(rec.email, subj, body, trackingRecord);
     const ok = !!result?.ok;
     if (ok) {
       sentCount++;
       if (result.provider === 'microsoft') pendingDeliveryCount++;
       if (trackingRecord) {
-        trackingRecord.sentAt = new Date().toISOString();
-        trackingRecord.subject = subj;
-        trackingRecord.logIndex = i;
+        trackingRecord.deliveryState = 'sent';
         try {
-          await registerTrackingSend(trackingRecord);
-          trackingRecord.state = 'pending';
-          saveActiveTrackingCampaign();
-          setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
-        } catch (e) {
-          trackingRecord.state = 'error';
-          saveActiveTrackingCampaign();
-          setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
-        }
+          await registerTrackingSend(trackingRecord, 'sent');
+          trackingRegistered = true;
+        } catch (e) {}
+        trackingRecord.state = trackingRegistered ? 'pending' : 'error';
+        saveActiveTrackingCampaign();
+        setStatus(i, 'sent', formatSuccessStatus(result, trackingRecord));
       } else {
         setStatus(i, 'sent', formatSuccessStatus(result));
       }
     } else {
       failedCount++;
       if (trackingRecord) {
+        trackingRecord.deliveryState = 'failed';
+        try {
+          await registerTrackingSend(trackingRecord, 'failed');
+        } catch (e) {}
         trackingRecord.state = 'failed';
         saveActiveTrackingCampaign();
       }
@@ -1995,6 +2017,7 @@ function createTrackingCampaign(recipientList, cfg) {
       name: rec.name || '',
       logIndex: index,
       sentAt: '',
+      deliveryState: 'queued',
       state: 'queued',
       openCount: 0,
       openedAt: '',
@@ -2019,6 +2042,7 @@ function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
       subject: String(rawRecord?.subject || existingRecord.subject || ''),
       logIndex: rawRecord?.logIndex ?? existingRecord.logIndex ?? index,
       sentAt: String(rawRecord?.sentAt || existingRecord.sentAt || ''),
+      deliveryState: normalizeTrackingDeliveryState(rawRecord?.deliveryState || existingRecord.deliveryState || (rawRecord?.sentAt || existingRecord.sentAt ? 'sent' : 'queued')),
       state: String(rawRecord?.state || existingRecord.state || ''),
       openCount: Number(rawRecord?.openCount || rawRecord?.opens || existingRecord.openCount || 0),
       openedAt: String(rawRecord?.openedAt || rawRecord?.lastOpenedAt || rawRecord?.firstOpenedAt || existingRecord.openedAt || ''),
@@ -2028,7 +2052,10 @@ function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
 
     if (!record.firstOpenedAt && record.openedAt) record.firstOpenedAt = record.openedAt;
     if (!record.lastOpenedAt && record.openedAt) record.lastOpenedAt = record.openedAt;
-    if (record.state === 'failed') return record;
+    if (record.state === 'failed' || record.deliveryState === 'failed') {
+      record.state = 'failed';
+      return record;
+    }
 
     if (record.openCount > 0 || record.firstOpenedAt || record.lastOpenedAt) {
       record.openedAt = record.lastOpenedAt || record.firstOpenedAt || record.openedAt;
@@ -2067,17 +2094,32 @@ function buildTrackingCampaignSummary(campaign, counts = getTrackingCampaignCoun
 
 function buildTrackingPixelHtml(trackingRecord) {
   if (!trackingRecord || !trackingCampaign?.endpoint) return '';
-  const pixelUrl = buildTrackerUrl(trackingCampaign.endpoint, {
+  const imgPixelUrl = buildTrackerUrl(trackingCampaign.endpoint, {
     action: 'open',
     campaign: trackingCampaign.id,
-    id: trackingRecord.id
+    id: trackingRecord.id,
+    slot: 'img'
   });
-  const safeSrc = escapeHtml(pixelUrl);
-  return `<img src="${safeSrc}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;opacity:0" referrerpolicy="no-referrer" />`;
+  const bgPixelUrl = buildTrackerUrl(trackingCampaign.endpoint, {
+    action: 'open',
+    campaign: trackingCampaign.id,
+    id: trackingRecord.id,
+    slot: 'bg'
+  });
+  const safeImgSrc = escapeHtml(imgPixelUrl);
+  const safeBgSrc = escapeHtml(bgPixelUrl);
+  return (
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="1" height="1" ` +
+    `style="border-collapse:collapse;mso-table-lspace:0;mso-table-rspace:0">` +
+    `<tr><td width="1" height="1" background="${safeBgSrc}" ` +
+    `style="width:1px;height:1px;padding:0;margin:0;font-size:1px;line-height:1px;background-image:url('${safeBgSrc}');background-repeat:no-repeat">` +
+    `<img src="${safeImgSrc}" alt="" width="1" height="1" style="display:block;width:1px;height:1px;border:0;outline:none;text-decoration:none" referrerpolicy="no-referrer" />` +
+    `</td></tr></table>`
+  );
 }
 
-async function registerTrackingSend(trackingRecord) {
-  if (!trackingCampaign) return;
+async function registerTrackingSend(trackingRecord, deliveryState = 'queued') {
+  if (!trackingCampaign || !trackingRecord) return;
   const params = {
     action: 'register',
     key: trackingCampaign.statusKey,
@@ -2089,7 +2131,8 @@ async function registerTrackingSend(trackingRecord) {
     senderEmail: trackingCampaign.senderEmail || senderEmail || '',
     senderName: trackingCampaign.senderName || senderName || '',
     provider: trackingCampaign.provider || authProvider || '',
-    subject: trackingRecord.subject || ''
+    subject: trackingRecord.subject || '',
+    deliveryState: normalizeTrackingDeliveryState(deliveryState)
   };
 
   try {
@@ -2137,6 +2180,11 @@ function mergeTrackingStatusIntoCampaign(campaign, records) {
   campaign.records.forEach(record => {
     const hit = byId.get(record.id);
     if (!hit) return;
+    record.deliveryState = normalizeTrackingDeliveryState(hit.deliveryState || record.deliveryState);
+    if (record.deliveryState === 'failed') {
+      record.state = 'failed';
+      return;
+    }
     const openCount = Number(hit.openCount || hit.opens || 0);
     const firstOpenedAt = String(hit.firstOpenedAt || hit.openedAt || '').trim();
     const lastOpenedAt = String(hit.lastOpenedAt || hit.openedAt || '').trim();
@@ -2312,6 +2360,7 @@ async function sendTrackingRegistrationFallback(endpoint, params) {
       method: 'GET',
       mode: 'no-cors',
       cache: 'no-store',
+      keepalive: true,
       credentials: 'omit'
     });
     return true;

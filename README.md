@@ -100,12 +100,21 @@ In Microsoft Entra App registrations:
 - Open tracking is approximate because many mail clients, especially work inboxes, block, proxy, or preload images.
 - Very early single opens are treated as likely auto-fetches instead of definite human opens.
 
+## Open Tracking Reliability
+This repo stays open-only. It does not use a browser extension or tracked-link redirects. To make pixel tracking as dependable as possible within that constraint, the app now:
+- Registers tracked recipients before each email send so very fast first opens are less likely to beat tracker row creation.
+- Uses email-friendly pixel markup instead of relying on a single hidden image style.
+- Dedupes near-simultaneous tracker hits so proxy retries or multiple pixel surfaces do not inflate counts.
+
+Even with those safeguards, image-open tracking is still approximate in many company inboxes because some mail systems block, proxy, or preload images.
+
 ## Open Tracking
 This repo includes optional open tracking in the app plus a lightweight Google Apps Script tracker endpoint.
 
 ### What it does
 - Adds an optional tracking pixel to Gmail and Outlook / Microsoft 365 sends.
-- Logs each tracked recipient to a tracker endpoint after send.
+- Registers tracked recipients before each send so very fast first opens are less likely to be missed.
+- Keeps each tracked recipient synced to the tracker endpoint before and after send.
 - Shows `pending`, `opened`, and `likely auto-fetch` states in the app.
 - This deployment ships with the shared tracker URL and status key hardcoded, so users do not need to paste tracking settings manually.
 - Keeps the active campaign refreshable from the send screen.
