@@ -146,8 +146,12 @@
   .log-dot.sent { background: rgba(71,255,176,0.12); border-color: var(--green); color: var(--green); }
   .log-dot.failed { background: rgba(255,79,79,0.1); border-color: var(--red); color: var(--red); }
   .log-em { flex: 1; }
+  .log-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .log-name-txt { font-size: 11px; color: var(--text2); }
   .log-msg { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; }
+  .log-retry-btn { display: none; align-items: center; justify-content: center; background: rgba(255,79,79,0.08); border: 1px solid rgba(255,79,79,0.2); color: var(--text); border-radius: 999px; padding: 4px 10px; font-size: 11px; font-family: 'DM Mono', monospace; cursor: pointer; transition: background 0.18s, border-color 0.18s; }
+  .log-retry-btn:hover { background: rgba(255,79,79,0.14); border-color: rgba(255,79,79,0.34); }
+  .log-retry-btn:disabled { opacity: 0.45; cursor: not-allowed; }
   .stat-row { display: flex; gap: 12px; margin-top: 20px; }
   .stat-c { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
   .stat-n { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 26px; }
@@ -570,6 +574,7 @@ let microsoftAccount = null;
 let trackingCampaign = null;
 let trackingCampaignHistory = [];
 let trackingPollTimer = null;
+let pendingRetryIndex = null;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SEND_INTERVAL_MINUTES = 2;
 const MICROSOFT_INLINE_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024;
@@ -762,6 +767,7 @@ async function fetchGoogleUserInfo() {
   } catch(e) {}
   showComposer();
   syncRemoteTrackingHistoryForCurrentUser(true);
+  runPendingRetryIfNeeded();
 }
 
 async function startMicrosoftAuth() {
@@ -786,6 +792,8 @@ async function startMicrosoftAuth() {
     authProvider = 'microsoft';
     await fetchMicrosoftUserInfo();
     showComposer();
+    syncRemoteTrackingHistoryForCurrentUser(true);
+    runPendingRetryIfNeeded();
   } catch (e) {
     showToast('❌ ' + getMicrosoftAuthErrorMessage(e));
   }
@@ -873,7 +881,8 @@ function resetAuthState() {
   senderAvatarUrl = '';
 }
 
-async function signOut() {
+async function signOut(options = {}) {
+  const preserveTrackingCampaign = !!options?.preserveTrackingCampaign;
   if (authProvider === 'google') {
     await revokeGoogleAccess();
   }
@@ -886,7 +895,8 @@ async function signOut() {
     } catch (e) {}
   }
   stopTrackingPolling();
-  trackingCampaign = null;
+  if (!preserveTrackingCampaign) pendingRetryIndex = null;
+  if (!preserveTrackingCampaign) trackingCampaign = null;
   renderTrackingPanel();
   resetAuthState();
   microsoftAccount = null;
@@ -1601,10 +1611,11 @@ async function startSending() {
   recipients.forEach((r,i) => {
     const d = document.createElement('div');
     d.className = 'log-item'; d.id = `log-${i}`;
-    d.innerHTML = `<div class="log-dot" id="dot-${i}"></div><div class="log-em"><div>${r.email}${r.name?` · <span class="log-name-txt">${r.name}</span>`:''}</div><div class="log-msg" id="msg-${i}">Queued</div></div>`;
+    d.innerHTML = `<div class="log-dot" id="dot-${i}"></div><div class="log-em"><div class="log-head"><div>${r.email}${r.name?` · <span class="log-name-txt">${r.name}</span>`:''}</div><button type="button" class="log-retry-btn" id="retry-${i}" onclick="retryFailedRecipient(${i})">Retry</button></div><div class="log-msg" id="msg-${i}">Queued</div></div>`;
     log.appendChild(d);
   });
 
+  let sendPausedMessage = '';
   for (let i = 0; i < recipients.length; i++) {
     const rec = recipients[i];
     const subj = applyRaw(document.getElementById('emailSubject').value, rec);
@@ -1662,6 +1673,14 @@ async function startSending() {
     document.getElementById('stSent').textContent = sentCount;
     document.getElementById('stFailed').textContent = failedCount;
 
+    if (!ok && shouldAbortRemainingSends(result)) {
+      sendPausedMessage = 'Sending paused. Sign in again, then tap Retry on the failed recipients.';
+      markRemainingRetriesNeeded(i + 1, 'Not attempted · sign in again, then tap Retry');
+      document.getElementById('sendCount').textContent = `${total} / ${total}`;
+      document.getElementById('progFill').style.width = '100%';
+      break;
+    }
+
     if (i < recipients.length - 1 && sendIntervalMs > 0) {
       const waitPrefix = ok ? formatSuccessStatus(result, trackingRecord) : formatFailureStatus(result);
       setStatus(i, ok ? 'sent' : 'failed', `${waitPrefix} · waiting ${formatIntervalText(sendIntervalMinutes)}`);
@@ -1669,9 +1688,9 @@ async function startSending() {
     }
   }
 
-  document.getElementById('sendTitle').textContent = 'Campaign Complete!';
+  document.getElementById('sendTitle').textContent = sendPausedMessage ? 'Send Paused' : 'Campaign Complete!';
   const doneBanner = document.getElementById('doneBanner');
-  doneBanner.textContent = buildCompletionBanner(authProvider, sentCount, failedCount);
+  doneBanner.textContent = sendPausedMessage || buildCompletionBanner(authProvider, sentCount, failedCount);
   doneBanner.style.display = 'flex';
   const deliveryNote = document.getElementById('deliveryNote');
   const deliveryText = buildDeliveryNote(authProvider, pendingDeliveryCount);
@@ -1709,7 +1728,7 @@ async function sendViaGmail(to, subject, body, trackingRecord = null) {
     const payload = await readResponsePayload(resp);
     if (resp.status === 401) {
       showToast('⚠️ Session expired. Please sign in again.');
-      signOut();
+      signOut({ preserveTrackingCampaign: true });
       return {
         ok: false,
         provider: 'google',
@@ -1778,7 +1797,7 @@ async function sendViaMicrosoft(to, subject, body, trackingRecord = null) {
     const payloadData = await readResponsePayload(resp);
     if (resp.status === 401) {
       showToast('⚠️ Microsoft session expired. Please sign in again.');
-      signOut();
+      signOut({ preserveTrackingCampaign: true });
       return {
         ok: false,
         provider: 'microsoft',
@@ -1902,9 +1921,14 @@ function setStatus(i, status, msg) {
   const dot = document.getElementById(`dot-${i}`);
   const item = document.getElementById(`log-${i}`);
   const msgEl = document.getElementById(`msg-${i}`);
+  const retryBtn = document.getElementById(`retry-${i}`);
   dot.className = `log-dot ${status}`;
   item.className = `log-item ${status}`;
   msgEl.textContent = msg;
+  if (retryBtn) {
+    retryBtn.style.display = status === 'failed' ? 'inline-flex' : 'none';
+    retryBtn.disabled = status === 'sending';
+  }
   if (status==='sending') dot.innerHTML = '<div class="spinner"></div>';
   else if (status==='sent') dot.innerHTML = '✓';
   else if (status==='failed') dot.innerHTML = '✗';
@@ -1983,6 +2007,22 @@ function formatFailureStatus(result) {
   return detail ? `Failed ✗ · ${detail}` : 'Failed ✗';
 }
 
+function shouldAbortRemainingSends(result) {
+  const detail = sanitizeHeaderValue(result?.detail || '').toLowerCase();
+  return Number(result?.status || 0) === 401 || /session expired|sign in again/.test(detail);
+}
+
+function markRemainingRetriesNeeded(startIndex, message) {
+  for (let i = startIndex; i < recipients.length; i++) {
+    const trackingRecord = trackingCampaign?.records[i] || null;
+    if (trackingRecord) trackingRecord.state = 'failed';
+    failedCount++;
+    setStatus(i, 'failed', message);
+  }
+  document.getElementById('stFailed').textContent = failedCount;
+  saveActiveTrackingCampaign();
+}
+
 function buildCompletionBanner(provider, successCount, failureCount) {
   if (provider === 'microsoft') {
     if (failureCount > 0) return `Campaign complete! ${successCount} accepted by Microsoft 365, ${failureCount} failed.`;
@@ -2032,7 +2072,12 @@ function normalizeTrackingCampaignSnapshot(campaign, existingCampaign = null) {
   if (!campaign?.id) return null;
   const existingById = new Map((existingCampaign?.records || []).map(record => [String(record?.id || ''), record]));
   const rawRecords = Array.isArray(campaign.records) ? campaign.records : [];
-  const records = rawRecords.map((rawRecord, index) => {
+  const combinedRecords = rawRecords.slice();
+  existingById.forEach((existingRecord, recordId) => {
+    if (!recordId || rawRecords.some(rawRecord => String(rawRecord?.id || '') === recordId)) return;
+    combinedRecords.push(existingRecord);
+  });
+  const records = combinedRecords.map((rawRecord, index) => {
     const recordId = String(rawRecord?.id || '');
     const existingRecord = existingById.get(recordId) || {};
     const record = {
@@ -2304,6 +2349,8 @@ function syncTrackingLogMessages() {
       setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking pending');
     } else if (record.state === 'error') {
       setStatus(record.logIndex, 'sent', 'Sent ✓ · tracking registration failed');
+    } else if (record.state === 'failed') {
+      setStatus(record.logIndex, 'failed', 'Failed ✗');
     }
   });
 }
@@ -2389,6 +2436,111 @@ function buildTrackerUrl(endpoint, params) {
   return url.toString();
 }
 
+function getRetryProvider() {
+  return String(authProvider || trackingCampaign?.provider || '').trim().toLowerCase();
+}
+
+function runPendingRetryIfNeeded() {
+  if (pendingRetryIndex == null) return;
+  const retryIndex = pendingRetryIndex;
+  pendingRetryIndex = null;
+  setTimeout(() => {
+    retryFailedRecipient(retryIndex);
+  }, 0);
+}
+
+function refreshSendSummaryFromLog() {
+  sentCount = document.querySelectorAll('#emailLog .log-item.sent').length;
+  failedCount = document.querySelectorAll('#emailLog .log-item.failed').length;
+  document.getElementById('stTotal').textContent = recipients.length;
+  document.getElementById('stSent').textContent = sentCount;
+  document.getElementById('stFailed').textContent = failedCount;
+  const doneBanner = document.getElementById('doneBanner');
+  if (doneBanner && doneBanner.style.display !== 'none') {
+    doneBanner.textContent = buildCompletionBanner(getRetryProvider() || authProvider, sentCount, failedCount);
+  }
+}
+
+async function retryFailedRecipient(index) {
+  const rec = recipients[index];
+  if (!rec) {
+    showToast('⚠️ This failed recipient is no longer available in the current send log.');
+    return;
+  }
+
+  const provider = getRetryProvider();
+  if (provider === 'google' && (!accessToken || authProvider !== 'google')) {
+    pendingRetryIndex = index;
+    showToast('⚠️ Sign in again to retry this Gmail send.');
+    startGoogleAuth();
+    return;
+  }
+
+  if (provider === 'microsoft' && authProvider !== 'microsoft') {
+    pendingRetryIndex = index;
+    showToast('⚠️ Sign in again to retry this Microsoft 365 send.');
+    await startMicrosoftAuth();
+    return;
+  }
+
+  const subj = applyRaw(document.getElementById('emailSubject').value, rec);
+  const body = applyOptOutFooter(applyRaw(document.getElementById('emailBody').value, rec));
+  const trackingRecord = trackingCampaign?.records[index] || null;
+  let trackingRegistered = false;
+
+  setStatus(index, 'sending', 'Retrying…');
+
+  if (trackingRecord) {
+    trackingRecord.sentAt = new Date().toISOString();
+    trackingRecord.subject = subj;
+    trackingRecord.logIndex = index;
+    trackingRecord.deliveryState = 'queued';
+    trackingRecord.state = 'queued';
+    trackingRecord.openCount = 0;
+    trackingRecord.openedAt = '';
+    trackingRecord.firstOpenedAt = '';
+    trackingRecord.lastOpenedAt = '';
+    try {
+      await registerTrackingSend(trackingRecord, 'queued');
+      trackingRegistered = true;
+    } catch (e) {}
+    saveActiveTrackingCampaign();
+  }
+
+  const result = await sendEmail(rec.email, subj, body, trackingRecord);
+  const ok = !!result?.ok;
+
+  if (ok) {
+    if (trackingRecord) {
+      trackingRecord.deliveryState = 'sent';
+      try {
+        await registerTrackingSend(trackingRecord, 'sent');
+        trackingRegistered = true;
+      } catch (e) {}
+      trackingRecord.state = trackingRegistered ? 'pending' : 'error';
+      saveActiveTrackingCampaign();
+      setStatus(index, 'sent', formatSuccessStatus(result, trackingRecord));
+    } else {
+      setStatus(index, 'sent', formatSuccessStatus(result));
+    }
+    if (trackingCampaign) startTrackingPolling();
+  } else {
+    if (trackingRecord) {
+      trackingRecord.deliveryState = 'failed';
+      try {
+        await registerTrackingSend(trackingRecord, 'failed');
+      } catch (e) {}
+      trackingRecord.state = 'failed';
+      saveActiveTrackingCampaign();
+    }
+    setStatus(index, 'failed', formatFailureStatus(result));
+  }
+
+  refreshSendSummaryFromLog();
+  renderTrackingPanel();
+  renderTrackingHistorySection();
+}
+
 // ==================== MODAL ====================
 function closeModal() { document.getElementById('confirmModal').classList.remove('show'); }
 function confirmSend() { closeModal(); navigateStep(4); startSending(); }
@@ -2396,6 +2548,7 @@ function confirmSend() { closeModal(); navigateStep(4); startSending(); }
 // ==================== UTILS ====================
 function startOver() {
   stopTrackingPolling();
+  pendingRetryIndex = null;
   saveActiveTrackingCampaign();
   trackingCampaign = null;
   recipients = []; attachedPdf = null; sentCount = 0; failedCount = 0;
