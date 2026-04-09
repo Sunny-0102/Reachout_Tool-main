@@ -586,6 +586,9 @@ const MICROSOFT_SCRIPT_URLS = [
   'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js'
 ];
 const TRACKING_POLL_MS = 20000;
+const TRACKING_REGISTER_TIMEOUT_MS = 15000;
+const TRACKING_STATUS_TIMEOUT_MS = 20000;
+const TRACKING_HISTORY_TIMEOUT_MS = 30000;
 const TRACKING_PREFETCH_WINDOW_MS = 30 * 1000;
 const TRACKING_THREAD_OPEN_WINDOW_MS = 2 * 60 * 1000;
 const TRACKING_HISTORY_STORAGE_KEY = 'mb_tracking_campaign_history_v1';
@@ -1261,6 +1264,27 @@ async function refreshSelectedTrackingHistory() {
     getTrackingHistoryCampaignById(getTrackingHistorySelectionId()) || visibleCampaigns[0]
   );
 
+  if (selectedCampaign) {
+    try {
+      await refreshTrackingHistoryCampaign(selectedCampaign);
+      showToast('Tracking history refreshed.');
+      return;
+    } catch (selectedError) {
+      try {
+        const synced = await syncRemoteTrackingHistoryForCurrentUser(true, true);
+        if (synced) {
+          showToast('Tracking history synced.');
+          return;
+        }
+      } catch (remoteError) {
+        showToast(`⚠️ ${getTrackingRequestErrorMessage(remoteError)}`);
+        return;
+      }
+      showToast(`⚠️ ${getTrackingRequestErrorMessage(selectedError)}`);
+      return;
+    }
+  }
+
   try {
     const synced = await syncRemoteTrackingHistoryForCurrentUser(true, true);
     if (synced) {
@@ -1268,29 +1292,8 @@ async function refreshSelectedTrackingHistory() {
       return;
     }
   } catch (remoteError) {
-    if (selectedCampaign) {
-      try {
-        await refreshTrackingHistoryCampaign(selectedCampaign);
-        showToast('Tracking history refreshed from the saved campaign on this browser.');
-        return;
-      } catch (fallbackError) {
-        showToast(`⚠️ ${getTrackingRequestErrorMessage(fallbackError)}`);
-        return;
-      }
-    }
     showToast(`⚠️ ${getTrackingRequestErrorMessage(remoteError)}`);
     return;
-  }
-
-  if (selectedCampaign) {
-    try {
-      await refreshTrackingHistoryCampaign(selectedCampaign);
-      showToast('Tracking history refreshed from the saved campaign on this browser.');
-      return;
-    } catch (fallbackError) {
-      showToast(`⚠️ ${getTrackingRequestErrorMessage(fallbackError)}`);
-      return;
-    }
   }
 
   showToast('Tracking history synced.');
@@ -1318,7 +1321,7 @@ async function syncRemoteTrackingHistoryForCurrentUser(silent = true, throwOnErr
       action: 'history',
       key: cfg.statusKey,
       senderEmail
-    });
+    }, { timeoutMs: TRACKING_HISTORY_TIMEOUT_MS });
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking history fetch failed.');
     mergeRemoteTrackingHistory(Array.isArray(payload.campaigns) ? payload.campaigns : []);
     if (!silent) showToast('Tracking history synced.');
@@ -1346,7 +1349,7 @@ async function refreshTrackingHistoryCampaign(campaign) {
     action: 'status',
     key: statusKey,
     campaign: normalized.id
-  });
+  }, { timeoutMs: TRACKING_STATUS_TIMEOUT_MS });
   if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
 
   const refreshed = normalizeTrackingCampaignSnapshot({
@@ -2181,7 +2184,9 @@ async function registerTrackingSend(trackingRecord, deliveryState = 'queued') {
   };
 
   try {
-    const payload = await requestTrackingJsonp(trackingCampaign.endpoint, params);
+    const payload = await requestTrackingJsonp(trackingCampaign.endpoint, params, {
+      timeoutMs: TRACKING_REGISTER_TIMEOUT_MS
+    });
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking registration failed.');
     return true;
   } catch (error) {
@@ -2201,7 +2206,7 @@ async function refreshTrackingNow(silent = false) {
       action: 'status',
       key: trackingCampaign.statusKey,
       campaign: trackingCampaign.id
-    });
+    }, { timeoutMs: TRACKING_STATUS_TIMEOUT_MS });
     if (!payload?.ok) throw new Error(payload?.error || 'Tracking status fetch failed.');
     mergeTrackingStatus(Array.isArray(payload.records) ? payload.records : []);
     trackingCampaign.lastSyncedAt = new Date().toISOString();
@@ -2370,19 +2375,20 @@ function stopTrackingPolling() {
   trackingPollTimer = null;
 }
 
-function requestTrackingJsonp(endpoint, params) {
+function requestTrackingJsonp(endpoint, params, options = {}) {
   return new Promise((resolve, reject) => {
     const callbackName = `mbTrackCb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const url = buildTrackerUrl(endpoint, { ...params, callback: callbackName });
     const script = document.createElement('script');
+    const timeoutMs = Math.max(1000, Number(options?.timeoutMs) || TRACKING_STATUS_TIMEOUT_MS);
     const cleanup = () => {
       delete window[callbackName];
       script.remove();
     };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error('Tracker endpoint timed out. It may not be public or may still be deploying.'));
-    }, 10000);
+      reject(new Error('Tracker endpoint timed out. It may not be public, may still be deploying, or may be responding slowly.'));
+    }, timeoutMs);
 
     window[callbackName] = (payload) => {
       clearTimeout(timer);
@@ -2422,7 +2428,7 @@ function getTrackingRequestErrorMessage(err) {
     return message;
   }
   if (/timed out/i.test(message)) {
-    return 'Open tracking endpoint timed out. Redeploy the Apps Script web app and set access to Anyone.';
+    return 'Open tracking is responding too slowly right now. Try again in a few seconds. If it keeps happening, redeploy the Apps Script web app and confirm access is set to Anyone.';
   }
   return message || 'Could not refresh open tracking right now.';
 }

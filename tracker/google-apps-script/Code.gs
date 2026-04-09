@@ -97,30 +97,12 @@ function getCampaignStatus_(e) {
   if (!campaign) return { ok: false, error: 'Missing campaign.' };
 
   const sheet = getTrackerSheet_();
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return { ok: true, records: [] };
+  const rowNumbers = getMatchingRowNumbersByColumnValue_(sheet, 2, campaign);
+  if (!rowNumbers.length) return { ok: true, records: [] };
 
-  const rows = sheet.getRange(2, 1, lastRow - 1, TRACKER_HEADERS.length).getValues();
-  const records = rows
-    .filter(function(row) { return String(row[1] || '') === campaign; })
+  const records = getTrackerRowsByNumber_(sheet, rowNumbers)
     .map(function(row) {
-      return {
-        id: String(row[0] || ''),
-        campaign: String(row[1] || ''),
-        email: String(row[2] || ''),
-        name: String(row[3] || ''),
-        sentAt: String(row[4] || ''),
-        firstOpenedAt: String(row[5] || ''),
-        lastOpenedAt: String(row[6] || ''),
-        openedAt: String(row[6] || row[5] || ''),
-        openCount: Number(row[7] || 0),
-        firstClickedAt: String(row[8] || ''),
-        lastClickedAt: String(row[9] || ''),
-        clickedAt: String(row[9] || row[8] || ''),
-        clickCount: Number(row[10] || 0),
-        lastClickedUrl: String(row[11] || ''),
-        deliveryState: normalizeDeliveryState_(row[18])
-      };
+      return buildTrackerStatusRecord_(row);
     });
 
   return { ok: true, records: records };
@@ -138,10 +120,10 @@ function getSenderHistory_(e) {
   }
 
   const sheet = getTrackerSheet_();
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return { ok: true, email: viewer.email, campaigns: [] };
+  const rowNumbers = getMatchingRowNumbersByColumnValue_(sheet, 15, viewer.email);
+  if (!rowNumbers.length) return { ok: true, email: viewer.email, campaigns: [] };
 
-  const rows = sheet.getRange(2, 1, lastRow - 1, TRACKER_HEADERS.length).getValues();
+  const rows = getTrackerRowsByNumber_(sheet, rowNumbers);
   const normalizedSenderEmail = normalizeEmail_(viewer.email);
   var campaignsById = {};
 
@@ -164,23 +146,7 @@ function getSenderHistory_(e) {
       };
     }
 
-    campaignsById[campaignId].records.push({
-      id: String(row[0] || ''),
-      email: String(row[2] || ''),
-      name: String(row[3] || ''),
-      subject: String(row[17] || ''),
-      sentAt: String(row[4] || ''),
-      firstOpenedAt: String(row[5] || ''),
-      lastOpenedAt: String(row[6] || ''),
-      openedAt: String(row[6] || row[5] || ''),
-      openCount: Number(row[7] || 0),
-      firstClickedAt: String(row[8] || ''),
-      lastClickedAt: String(row[9] || ''),
-      clickedAt: String(row[9] || row[8] || ''),
-      clickCount: Number(row[10] || 0),
-      lastClickedUrl: String(row[11] || ''),
-      deliveryState: normalizeDeliveryState_(row[18])
-    });
+    campaignsById[campaignId].records.push(buildTrackerStatusRecord_(row));
 
     if (String(row[13] || '') > String(campaignsById[campaignId].lastSyncedAt || '')) {
       campaignsById[campaignId].lastSyncedAt = String(row[13] || '');
@@ -304,20 +270,101 @@ function getTrackerSheet_() {
   }
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, TRACKER_HEADERS.length).setValues([TRACKER_HEADERS]);
-  } else {
+  } else if (trackerHeadersNeedRefresh_(sheet)) {
     sheet.getRange(1, 1, 1, TRACKER_HEADERS.length).setValues([TRACKER_HEADERS]);
   }
   return sheet;
 }
 
 function findRowNumberById_(sheet, id) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return -1;
-  const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0] || '') === id) return i + 2;
+  const matches = getMatchingRowNumbersByColumnValue_(sheet, 1, id);
+  return matches.length ? matches[0] : -1;
+}
+
+function trackerHeadersNeedRefresh_(sheet) {
+  const currentHeaders = sheet.getRange(1, 1, 1, TRACKER_HEADERS.length).getValues()[0] || [];
+  for (var i = 0; i < TRACKER_HEADERS.length; i++) {
+    if (String(currentHeaders[i] || '') !== TRACKER_HEADERS[i]) return true;
   }
-  return -1;
+  return false;
+}
+
+function getMatchingRowNumbersByColumnValue_(sheet, columnIndex, value) {
+  const normalizedValue = String(value || '').trim();
+  const lastRow = sheet.getLastRow();
+  if (!normalizedValue || lastRow < 2) return [];
+
+  const range = sheet.getRange(2, columnIndex, lastRow - 1, 1);
+  const finder = range.createTextFinder(normalizedValue)
+    .matchEntireCell(true)
+    .matchCase(false);
+  const matches = finder.findAll() || [];
+  if (matches.length) {
+    return matches
+      .map(function(match) { return match.getRow(); })
+      .sort(function(a, b) { return a - b; });
+  }
+
+  const values = range.getValues();
+  const rowNumbers = [];
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0] || '').trim().toLowerCase() === normalizedValue.toLowerCase()) {
+      rowNumbers.push(i + 2);
+    }
+  }
+  return rowNumbers;
+}
+
+function getTrackerRowsByNumber_(sheet, rowNumbers) {
+  const sortedRows = (rowNumbers || [])
+    .filter(function(rowNumber) { return Number(rowNumber) >= 2; })
+    .sort(function(a, b) { return a - b; });
+  if (!sortedRows.length) return [];
+
+  const rows = [];
+  var startRow = sortedRows[0];
+  var endRow = sortedRows[0];
+
+  function flushChunk_() {
+    const chunkValues = sheet.getRange(startRow, 1, endRow - startRow + 1, TRACKER_HEADERS.length).getValues();
+    chunkValues.forEach(function(rawRow) {
+      rows.push(normalizeTrackerRow_(rawRow));
+    });
+  }
+
+  for (var i = 1; i < sortedRows.length; i++) {
+    if (sortedRows[i] === endRow + 1) {
+      endRow = sortedRows[i];
+      continue;
+    }
+    flushChunk_();
+    startRow = sortedRows[i];
+    endRow = sortedRows[i];
+  }
+  flushChunk_();
+
+  return rows;
+}
+
+function buildTrackerStatusRecord_(row) {
+  return {
+    id: String(row[0] || ''),
+    campaign: String(row[1] || ''),
+    email: String(row[2] || ''),
+    name: String(row[3] || ''),
+    subject: String(row[17] || ''),
+    sentAt: String(row[4] || ''),
+    firstOpenedAt: String(row[5] || ''),
+    lastOpenedAt: String(row[6] || ''),
+    openedAt: String(row[6] || row[5] || ''),
+    openCount: Number(row[7] || 0),
+    firstClickedAt: String(row[8] || ''),
+    lastClickedAt: String(row[9] || ''),
+    clickedAt: String(row[9] || row[8] || ''),
+    clickCount: Number(row[10] || 0),
+    lastClickedUrl: String(row[11] || ''),
+    deliveryState: normalizeDeliveryState_(row[18])
+  };
 }
 
 function normalizeTrackerRow_(row) {
